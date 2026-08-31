@@ -21,13 +21,20 @@ COMFY1_PID=""
 
 cleanup() {
     echo ""
-    echo "[dual-gpu] Shutting down ComfyUI instances..."
+    echo "[dual-gpu] Shutting down ComfyUI instances we started..."
+    # Only stop instances THIS script launched — never touch an already-running
+    # ComfyUI session the user started themselves.
     [ -n "$COMFY0_PID" ] && kill "$COMFY0_PID" 2>/dev/null || true
     [ -n "$COMFY1_PID" ] && kill "$COMFY1_PID" 2>/dev/null || true
     wait 2>/dev/null || true
     echo "[dual-gpu] Done."
 }
 trap cleanup EXIT INT TERM
+
+# Return 0 if a ComfyUI instance is already alive on the given port.
+is_alive() {
+    curl -sf "http://$HOST:$1/system_stats" >/dev/null 2>&1
+}
 
 # --- Check GPU count -------------------------------------------------------
 if command -v nvidia-smi >/dev/null 2>&1; then
@@ -40,7 +47,21 @@ else
     echo "[dual-gpu] WARNING: nvidia-smi not found — cannot verify GPU count. Continuing anyway."
 fi
 
-# --- Locate ComfyUI --------------------------------------------------------
+# --- Detect already-running ComfyUI instances ------------------------------
+# If the user already has ComfyUI running on a port, we connect to it rather
+# than starting (or killing) their session.
+GPU0_RUNNING=false
+GPU1_RUNNING=false
+if is_alive "$PORT0"; then
+    GPU0_RUNNING=true
+    echo "[dual-gpu] ComfyUI already running on port $PORT0 — skipping (will connect to it)."
+fi
+if is_alive "$PORT1"; then
+    GPU1_RUNNING=true
+    echo "[dual-gpu] ComfyUI already running on port $PORT1 — skipping (will connect to it)."
+fi
+
+# --- Locate ComfyUI (only needed if we must start an instance) -------------
 find_comfyui() {
     if [ -n "${COMFYUI_PATH:-}" ] && [ -f "$COMFYUI_PATH/main.py" ]; then
         echo "$COMFYUI_PATH"
@@ -55,14 +76,19 @@ find_comfyui() {
     return 1
 }
 
-COMFY_DIR="$(find_comfyui)"
-if [ -z "$COMFY_DIR" ]; then
-    echo "[dual-gpu] ERROR: Could not find ComfyUI." >&2
-    echo "  Searched: \$COMFYUI_PATH, ~/ComfyUI, ~/comfyui, /opt/ComfyUI, ~/AI/ComfyUI" >&2
-    echo "  Fix: install ComfyUI, or set COMFYUI_PATH=/path/to/ComfyUI and re-run." >&2
-    exit 1
+COMFY_DIR=""
+if [ "$GPU0_RUNNING" = false ] || [ "$GPU1_RUNNING" = false ]; then
+    COMFY_DIR="$(find_comfyui)"
+    if [ -z "$COMFY_DIR" ]; then
+        echo "[dual-gpu] ERROR: Could not find ComfyUI (needed to start a missing instance)." >&2
+        echo "  Searched: \$COMFYUI_PATH, ~/ComfyUI, ~/comfyui, /opt/ComfyUI, ~/AI/ComfyUI" >&2
+        echo "  Fix: install ComfyUI, or set COMFYUI_PATH=/path/to/ComfyUI and re-run." >&2
+        exit 1
+    fi
+    echo "[dual-gpu] Using ComfyUI at: $COMFY_DIR"
+else
+    echo "[dual-gpu] Both ComfyUI instances already running — no ComfyUI install lookup needed."
 fi
-echo "[dual-gpu] Using ComfyUI at: $COMFY_DIR"
 
 # --- Activate venv if present ----------------------------------------------
 if [ -d "$APP_DIR/venv" ]; then
@@ -89,16 +115,24 @@ wait_for() {
 }
 
 # --- Launch ComfyUI instance 0 (GPU 0, port 8188) --------------------------
-echo "[dual-gpu] Starting ComfyUI on GPU 0 (port $PORT0)..."
-( cd "$COMFY_DIR" && CUDA_VISIBLE_DEVICES=0 "$PYTHON" main.py --port "$PORT0" --listen "$HOST" ) \
-    > "$APP_DIR/comfyui-gpu0.log" 2>&1 &
-COMFY0_PID=$!
+if [ "$GPU0_RUNNING" = true ]; then
+    echo "[dual-gpu] Reusing existing ComfyUI on GPU 0 (port $PORT0)."
+else
+    echo "[dual-gpu] Starting ComfyUI on GPU 0 (port $PORT0)..."
+    ( cd "$COMFY_DIR" && CUDA_VISIBLE_DEVICES=0 "$PYTHON" main.py --port "$PORT0" --listen "$HOST" ) \
+        > "$APP_DIR/comfyui-gpu0.log" 2>&1 &
+    COMFY0_PID=$!
+fi
 
 # --- Launch ComfyUI instance 1 (GPU 1, port 8189) --------------------------
-echo "[dual-gpu] Starting ComfyUI on GPU 1 (port $PORT1)..."
-( cd "$COMFY_DIR" && CUDA_VISIBLE_DEVICES=1 "$PYTHON" main.py --port "$PORT1" --listen "$HOST" ) \
-    > "$APP_DIR/comfyui-gpu1.log" 2>&1 &
-COMFY1_PID=$!
+if [ "$GPU1_RUNNING" = true ]; then
+    echo "[dual-gpu] Reusing existing ComfyUI on GPU 1 (port $PORT1)."
+else
+    echo "[dual-gpu] Starting ComfyUI on GPU 1 (port $PORT1)..."
+    ( cd "$COMFY_DIR" && CUDA_VISIBLE_DEVICES=1 "$PYTHON" main.py --port "$PORT1" --listen "$HOST" ) \
+        > "$APP_DIR/comfyui-gpu1.log" 2>&1 &
+    COMFY1_PID=$!
+fi
 
 # --- Wait for both to respond ---------------------------------------------
 wait_for "http://$HOST:$PORT0" "ComfyUI GPU 0" || exit 1

@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 # Simple-Comfort launcher
 # Starts the local web server (if not already running) and opens the browser.
-APP_DIR="/home/ubuntu/simple_comfort"
+# Derive the app directory from this script's own location so it works no
+# matter where the project lives or which user runs it.
+APP_DIR="$(dirname "$(readlink -f "$0")")"
 PIDFILE="$APP_DIR/.sc.pid"
 URL="http://localhost:7788"
+
+# Activate a local virtual environment if one exists.
+if [ -d "$APP_DIR/venv" ]; then
+    # shellcheck disable=SC1091
+    source "$APP_DIR/venv/bin/activate"
+fi
 
 # Prevent duplicate instances — if already running, just open the browser.
 if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then

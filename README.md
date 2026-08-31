@@ -98,17 +98,27 @@ Instead of `python3 app.py`, run:
 
 This script:
 
-1. Starts **ComfyUI on GPU 0** (`CUDA_VISIBLE_DEVICES=0`) on port **8188**.
-2. Starts **ComfyUI on GPU 1** (`CUDA_VISIBLE_DEVICES=1`) on port **8189**.
+1. **Checks whether ComfyUI is already running** on ports 8188 and 8189
+   (`curl .../system_stats`). **If an instance is already running on a port, it
+   is left alone — Simple-Comfort connects to it and does NOT restart it.**
+2. Cold-starts **only** the instance(s) that are not already responding
+   (`CUDA_VISIBLE_DEVICES=0` on port 8188, `CUDA_VISIBLE_DEVICES=1` on port 8189).
 3. Waits for both instances to respond.
 4. Writes `COMFY_ENDPOINTS=http://127.0.0.1:8188,http://127.0.0.1:8189` to `.env`.
 5. Launches Simple-Comfort, which automatically load-balances across both GPUs.
+
+> **Already running ComfyUI?** If you already have ComfyUI up on both ports
+> (e.g. started by your own launcher), Simple-Comfort connects to them
+> automatically — it will **not** start or kill your existing ComfyUI session.
+> In that case you can also just copy `.env.example` to `.env` (which already
+> lists both dual-GPU endpoints) and run `./launch.sh` or the desktop icon.
 
 When both ComfyUI instances are up, the header shows a **status chip per GPU**
 (`GPU 0`, `GPU 1`) with a colored dot — green = idle, yellow = busy, red =
 offline — and a `✓N` badge counting completed jobs on each GPU.
 
-On exit (Ctrl-C), both ComfyUI instances are stopped cleanly.
+On exit (Ctrl-C), only the ComfyUI instances that **this script started** are
+stopped — an already-running session you started yourself is left untouched.
 
 ### Single GPU
 
