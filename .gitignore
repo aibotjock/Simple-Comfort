@@ -1,0 +1,17 @@
+# Generated output
+outputs/
+uploads/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Environments
+.env
+venv/
+.venv/
+
+# Logs & OS cruft
+*.log
+.DS_Store

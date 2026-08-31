@@ -1,0 +1,73 @@
+{
+  "_comment": "Wan 2.2 TI2V-5B Image-to-Video (ComfyUI API format, WanVideoWrapper nodes). Reference image loaded via LoadImage (node 10) then encoded through WanVideoImageClipEncode (node 5). Adjust loader node names for your installed files.",
+  "_documentation": {
+    "reference_image_node": "10 -> LoadImage.image ({{REFERENCE_IMAGE}})",
+    "image_embed_node": "5 -> WanVideoImageClipEncode (num_frames / start image)",
+    "sampler_node": "6 -> WanVideoSampler",
+    "save_node": "9 -> VHS_VideoCombine"
+  },
+  "1": {
+    "class_type": "WanVideoModelLoader",
+    "inputs": {"model": "{{CHECKPOINT_NAME}}", "base_precision": "fp16", "quantization": "disabled"}
+  },
+  "2": {
+    "class_type": "WanVideoVAELoader",
+    "inputs": {"model_name": "wan2.2_vae.safetensors", "precision": "fp16"}
+  },
+  "3": {
+    "class_type": "LoadWanVideoT5TextEncoder",
+    "inputs": {"model_name": "umt5_xxl_fp16.safetensors", "precision": "fp16"}
+  },
+  "4": {
+    "class_type": "WanVideoTextEncode",
+    "inputs": {
+      "t5": ["3", 0],
+      "positive_prompt": "{{POSITIVE_PROMPT}}",
+      "negative_prompt": "{{NEGATIVE_PROMPT}}"
+    }
+  },
+  "10": {
+    "class_type": "LoadImage",
+    "inputs": {"image": "{{REFERENCE_IMAGE}}"}
+  },
+  "5": {
+    "class_type": "WanVideoImageClipEncode",
+    "inputs": {
+      "vae": ["2", 0],
+      "image": ["10", 0],
+      "width": "{{WIDTH}}",
+      "height": "{{HEIGHT}}",
+      "num_frames": "{{FRAMES}}"
+    }
+  },
+  "6": {
+    "class_type": "WanVideoSampler",
+    "inputs": {
+      "model": ["1", 0],
+      "text_embeds": ["4", 0],
+      "image_embeds": ["5", 0],
+      "steps": "{{STEPS}}",
+      "cfg": "{{GUIDANCE}}",
+      "seed": "{{SEED}}",
+      "scheduler": "unipc",
+      "shift": 5.0,
+      "denoise_strength": "{{MOTION_STRENGTH}}"
+    }
+  },
+  "8": {
+    "class_type": "WanVideoDecode",
+    "inputs": {"vae": ["2", 0], "samples": ["6", 0], "enable_vae_tiling": true}
+  },
+  "9": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "images": ["8", 0],
+      "frame_rate": "{{FPS}}",
+      "format": "video/h264-mp4",
+      "filename_prefix": "simplecomfort_wan",
+      "pix_fmt": "yuv420p",
+      "crf": 18,
+      "save_output": true
+    }
+  }
+}

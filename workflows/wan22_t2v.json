@@ -1,0 +1,64 @@
+{
+  "_comment": "Wan 2.2 TI2V-5B Text-to-Video (ComfyUI API format, WanVideoWrapper nodes). Adjust node 1 'model' to your Wan 2.2 diffusion model, node 3 'model_name' to your umt5 text encoder, node 2 'model_name' to your Wan VAE.",
+  "_documentation": {
+    "model_node": "1 -> WanVideoModelLoader.model (wan2.2_ti2v_5B checkpoint)",
+    "vae_node": "2 -> WanVideoVAELoader.model_name",
+    "text_encoder_node": "3 -> LoadWanVideoT5TextEncoder.model_name (umt5)",
+    "sampler_node": "6 -> WanVideoSampler (steps/cfg/seed/num_frames)",
+    "save_node": "9 -> VHS_VideoCombine (frame_rate)"
+  },
+  "1": {
+    "class_type": "WanVideoModelLoader",
+    "inputs": {"model": "{{CHECKPOINT_NAME}}", "base_precision": "fp16", "quantization": "disabled"}
+  },
+  "2": {
+    "class_type": "WanVideoVAELoader",
+    "inputs": {"model_name": "wan2.2_vae.safetensors", "precision": "fp16"}
+  },
+  "3": {
+    "class_type": "LoadWanVideoT5TextEncoder",
+    "inputs": {"model_name": "umt5_xxl_fp16.safetensors", "precision": "fp16"}
+  },
+  "4": {
+    "class_type": "WanVideoTextEncode",
+    "inputs": {
+      "t5": ["3", 0],
+      "positive_prompt": "{{POSITIVE_PROMPT}}",
+      "negative_prompt": "{{NEGATIVE_PROMPT}}"
+    }
+  },
+  "5": {
+    "class_type": "WanVideoEmptyEmbeds",
+    "inputs": {"width": "{{WIDTH}}", "height": "{{HEIGHT}}", "num_frames": "{{FRAMES}}"}
+  },
+  "6": {
+    "class_type": "WanVideoSampler",
+    "inputs": {
+      "model": ["1", 0],
+      "text_embeds": ["4", 0],
+      "image_embeds": ["5", 0],
+      "steps": "{{STEPS}}",
+      "cfg": "{{GUIDANCE}}",
+      "seed": "{{SEED}}",
+      "scheduler": "unipc",
+      "shift": 5.0,
+      "denoise_strength": "{{MOTION_STRENGTH}}"
+    }
+  },
+  "8": {
+    "class_type": "WanVideoDecode",
+    "inputs": {"vae": ["2", 0], "samples": ["6", 0], "enable_vae_tiling": true}
+  },
+  "9": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "images": ["8", 0],
+      "frame_rate": "{{FPS}}",
+      "format": "video/h264-mp4",
+      "filename_prefix": "simplecomfort_wan",
+      "pix_fmt": "yuv420p",
+      "crf": 18,
+      "save_output": true
+    }
+  }
+}

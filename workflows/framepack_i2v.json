@@ -1,0 +1,76 @@
+{
+  "_comment": "FramePack Image-to-Video (ComfyUI API format, FramePackWrapper nodes). FramePack generates a long clip progressively in a single call. Reference image loaded via LoadImage (node 10). For T2V builds that support it, replace node 10 with a blank image or a FramePackTextEncode-driven start latent. Adjust loader model_name fields for your setup.",
+  "_documentation": {
+    "model_node": "1 -> DownloadAndLoadFramePackModel / FramePackModelLoader.model",
+    "reference_image_node": "10 -> LoadImage.image ({{REFERENCE_IMAGE}})",
+    "sampler_node": "6 -> FramePackSampler (total_second_length, steps, cfg, seed)",
+    "anti_drift": "6 -> FramePackSampler.gpu_memory_preservation / use_teacache for drift control",
+    "save_node": "9 -> VHS_VideoCombine (frame_rate)"
+  },
+  "1": {
+    "class_type": "FramePackModelLoader",
+    "inputs": {"model": "{{CHECKPOINT_NAME}}", "base_precision": "bf16", "quantization": "disabled"}
+  },
+  "2": {
+    "class_type": "FramePackVAELoader",
+    "inputs": {"model_name": "hunyuan_video_vae_bf16.safetensors", "precision": "bf16"}
+  },
+  "3": {
+    "class_type": "FramePackTextEncoderLoader",
+    "inputs": {"llama_name": "llava_llama3_fp16.safetensors", "clip_l_name": "clip_l.safetensors"}
+  },
+  "4": {
+    "class_type": "FramePackTextEncode",
+    "inputs": {
+      "text_encoders": ["3", 0],
+      "positive_prompt": "{{POSITIVE_PROMPT}}",
+      "negative_prompt": "{{NEGATIVE_PROMPT}}"
+    }
+  },
+  "10": {
+    "class_type": "LoadImage",
+    "inputs": {"image": "{{REFERENCE_IMAGE}}"}
+  },
+  "5": {
+    "class_type": "FramePackImageEncode",
+    "inputs": {
+      "vae": ["2", 0],
+      "start_image": ["10", 0],
+      "width": "{{WIDTH}}",
+      "height": "{{HEIGHT}}"
+    }
+  },
+  "6": {
+    "class_type": "FramePackSampler",
+    "inputs": {
+      "model": ["1", 0],
+      "positive": ["4", 0],
+      "negative": ["4", 1],
+      "start_latent": ["5", 0],
+      "total_second_length": "{{TOTAL_SECONDS}}",
+      "steps": "{{STEPS}}",
+      "cfg": "{{GUIDANCE}}",
+      "seed": "{{SEED}}",
+      "gpu_memory_preservation": 6.0,
+      "use_teacache": true,
+      "latent_window_size": 9,
+      "shift": "{{ANTI_DRIFT}}"
+    }
+  },
+  "8": {
+    "class_type": "FramePackDecode",
+    "inputs": {"vae": ["2", 0], "samples": ["6", 0]}
+  },
+  "9": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "images": ["8", 0],
+      "frame_rate": "{{FPS}}",
+      "format": "video/h264-mp4",
+      "filename_prefix": "simplecomfort_framepack",
+      "pix_fmt": "yuv420p",
+      "crf": 18,
+      "save_output": true
+    }
+  }
+}

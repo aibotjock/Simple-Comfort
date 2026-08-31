@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Simple-Comfort</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="logo">
+      <span class="logo-mark">◆</span>
+      <span class="logo-text">Simple-Comfort</span>
+    </div>
+    <div class="status" id="conn-status">
+      <span class="dot dot-yellow" id="conn-dot"></span>
+      <span id="conn-label">Checking…</span>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- ============ FORM ============ -->
+    <section class="card form-card" id="form-card">
+      <!-- Mode -->
+      <div class="field">
+        <label class="field-label">Mode</label>
+        <div class="pill-group" id="mode-group" data-name="mode">
+          <button type="button" class="pill active" data-value="t2v">Text to Video</button>
+          <button type="button" class="pill" data-value="i2v">Image to Video</button>
+        </div>
+      </div>
+
+      <!-- Model -->
+      <div class="field">
+        <label class="field-label">Model</label>
+        <div class="pill-group" id="model-group" data-name="model">
+          <button type="button" class="pill active" data-value="ltx23">
+            <span class="dot dot-yellow model-dot"></span>LTX-2.3
+          </button>
+          <button type="button" class="pill" data-value="wan22">
+            <span class="dot dot-yellow model-dot"></span>Wan 2.2
+          </button>
+          <button type="button" class="pill" data-value="framepack">
+            <span class="dot dot-yellow model-dot"></span>FramePack
+          </button>
+        </div>
+      </div>
+
+      <!-- Prompt -->
+      <div class="field">
+        <label class="field-label" for="prompt">Prompt</label>
+        <textarea id="prompt" class="textarea" rows="4" autofocus
+                  placeholder="Describe the 30-second clip you want to generate…"></textarea>
+      </div>
+
+      <!-- Reference image (I2V only) -->
+      <div class="field hidden" id="ref-field">
+        <label class="field-label">Reference Image</label>
+        <div class="dropzone" id="dropzone">
+          <input type="file" id="ref-input" accept="image/*" hidden />
+          <div class="dropzone-inner" id="dropzone-inner">
+            <span class="dz-icon">⬆</span>
+            <span>Drag &amp; drop an image, or click to choose</span>
+          </div>
+          <img id="ref-preview" class="ref-preview hidden" alt="reference preview" />
+        </div>
+      </div>
+
+      <!-- Continuity -->
+      <div class="field">
+        <label class="field-label">Continuity</label>
+        <div class="pill-group" id="continuity-group" data-name="continuity">
+          <button type="button" class="pill active" data-value="new">New Clip</button>
+          <button type="button" class="pill" data-value="continue">Continue Previous Clip</button>
+        </div>
+        <div class="continuity-panel hidden" id="continuity-panel">
+          <div class="cont-row">
+            <img id="cont-thumb" class="cont-thumb" alt="previous clip" />
+            <div class="cont-info">
+              <div class="cont-label">Previous prompt</div>
+              <div class="cont-prev-prompt" id="cont-prev-prompt">—</div>
+            </div>
+          </div>
+          <label class="field-label" for="cont-change">What changes next?</label>
+          <textarea id="cont-change" class="textarea" rows="2"
+                    placeholder="Describe what should change in the next clip…"></textarea>
+        </div>
+      </div>
+
+      <!-- Aspect ratio -->
+      <div class="field">
+        <label class="field-label">Aspect Ratio</label>
+        <div class="pill-group" id="aspect-group" data-name="aspect_ratio">
+          <button type="button" class="pill active" data-value="16:9">16:9</button>
+          <button type="button" class="pill" data-value="9:16">9:16</button>
+          <button type="button" class="pill" data-value="1:1">1:1</button>
+        </div>
+      </div>
+
+      <!-- Quality -->
+      <div class="field">
+        <label class="field-label">Quality</label>
+        <div class="pill-group" id="quality-group" data-name="quality">
+          <button type="button" class="pill" data-value="draft">Draft</button>
+          <button type="button" class="pill active" data-value="balanced">Balanced</button>
+          <button type="button" class="pill" data-value="quality">Quality</button>
+        </div>
+      </div>
+
+      <!-- Lip-sync -->
+      <div class="field field-row">
+        <label class="field-label" for="lipsync">Lip-Sync Ready</label>
+        <label class="switch">
+          <input type="checkbox" id="lipsync" checked />
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <!-- Advanced -->
+      <details class="advanced">
+        <summary>Advanced Settings</summary>
+        <div class="advanced-grid">
+          <div class="adv-field">
+            <label for="seed">Seed <small>(empty = random)</small></label>
+            <input type="number" id="seed" class="input" placeholder="random" />
+          </div>
+          <div class="adv-field">
+            <label for="steps">Steps <span class="val" id="steps-val">25</span></label>
+            <input type="range" id="steps" min="5" max="60" value="25" />
+          </div>
+          <div class="adv-field">
+            <label for="guidance">Guidance <span class="val" id="guidance-val">3.5</span></label>
+            <input type="range" id="guidance" min="1" max="15" step="0.5" value="3.5" />
+          </div>
+          <div class="adv-field">
+            <label for="fps">FPS</label>
+            <select id="fps" class="input">
+              <option value="8">8</option>
+              <option value="16">16</option>
+              <option value="24" selected>24</option>
+            </select>
+          </div>
+          <div class="adv-field">
+            <label for="resolution">Resolution</label>
+            <select id="resolution" class="input">
+              <option value="">Auto (from aspect ratio)</option>
+              <option value="1280x720">1280×720</option>
+              <option value="720x1280">720×1280</option>
+              <option value="960x960">960×960</option>
+              <option value="1024x576">1024×576</option>
+            </select>
+          </div>
+          <div class="adv-field">
+            <label for="segment">Segment length (s) <span class="val" id="segment-val">5</span></label>
+            <input type="range" id="segment" min="2" max="15" step="1" value="5" />
+          </div>
+          <div class="adv-field" id="motion-field">
+            <label for="motion">Motion strength <span class="val" id="motion-val">1.0</span></label>
+            <input type="range" id="motion" min="0.1" max="2" step="0.1" value="1.0" />
+          </div>
+          <div class="adv-field hidden" id="worker-field">
+            <label for="worker">GPU Worker</label>
+            <select id="worker" class="input"></select>
+          </div>
+        </div>
+      </details>
+
+      <button class="btn-primary" id="generate-btn">GENERATE 30s CLIP</button>
+      <div class="hint" id="form-hint"></div>
+    </section>
+
+    <!-- ============ PROGRESS ============ -->
+    <section class="card progress-card hidden" id="progress-card">
+      <div class="progress-head">
+        <span id="progress-section">Section 1/1 — 0%</span>
+        <span id="progress-eta" class="eta"></span>
+      </div>
+      <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+      <div class="progress-msg" id="progress-msg"></div>
+      <img id="preview-frame" class="preview-frame hidden" alt="live preview" />
+      <button class="btn-secondary btn-danger" id="cancel-btn">Cancel</button>
+    </section>
+
+    <!-- ============ OUTPUT ============ -->
+    <section class="card output-card hidden" id="output-card">
+      <video id="output-video" class="output-video" controls autoplay muted loop></video>
+      <div class="output-actions">
+        <button class="btn-secondary" id="play-btn">▶ Play</button>
+        <button class="btn-secondary" id="open-btn">📁 Open Output</button>
+        <button class="btn-secondary" id="continue-btn">→ Continue From This Clip</button>
+      </div>
+      <div class="output-meta" id="output-meta"></div>
+    </section>
+
+    <!-- ============ GALLERY ============ -->
+    <section class="gallery-section">
+      <h3 class="gallery-title">Recent Clips</h3>
+      <div class="gallery" id="gallery"></div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
