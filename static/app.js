@@ -14,7 +14,10 @@ const state = {
   continueFrom: null,  // clip_id to continue
   lastClip: null,
   projectId: null,
+  currentResultClip: null,
 };
+
+const MODEL_LABELS = { ltx23: "LTX-2.3", wan22: "Wan 2.2", framepack: "FramePack" };
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -25,9 +28,13 @@ document.addEventListener("DOMContentLoaded", () => {
   wireDropzone();
   wireAdvanced();
   wireProQuality();
+  wirePromptCounter();
+  wireLipsyncState();
+  wireAnnealToggle();
   wireButtons();
   wirePanels();
   wireLibraryForms();
+  wireExportCards();
   refreshStatus();
   refreshModels();
   refreshGallery();
@@ -64,6 +71,8 @@ function onPillChange(name, value) {
     $("#ref-field").classList.toggle("hidden", value !== "i2v");
   } else if (name === "model") {
     state.model = value;
+    const badge = $("#model-badge");
+    if (badge) badge.textContent = MODEL_LABELS[value] || value;
     applyModelConstraints();
   } else if (name === "continuity") {
     state.continuity = value;
@@ -81,6 +90,46 @@ function applyQualityDefaults(q) {
   const [steps, guidance] = map[q] || map.balanced;
   $("#steps").value = steps; $("#steps-val").textContent = steps;
   $("#guidance").value = guidance; $("#guidance-val").textContent = guidance;
+}
+
+/* --------------------------- prompt counter / autogrow --------------------------- */
+function wirePromptCounter() {
+  const ta = $("#prompt");
+  const counter = $("#prompt-counter");
+  if (!ta || !counter) return;
+  const max = ta.getAttribute("maxlength") || 500;
+  const update = () => {
+    const len = ta.value.length;
+    counter.textContent = `${len} / ${max}`;
+    counter.classList.toggle("warn", len > max * 0.9);
+    // auto-grow up to ~8 rows
+    ta.style.height = "auto";
+    ta.style.height = Math.min(ta.scrollHeight, 260) + "px";
+  };
+  ta.addEventListener("input", update);
+  update();
+}
+
+/* --------------------------- lip-sync state label --------------------------- */
+function wireLipsyncState() {
+  const cb = $("#lipsync");
+  const label = $("#lipsync-state");
+  if (!cb || !label) return;
+  const update = () => { label.textContent = cb.checked ? "ON" : "OFF"; };
+  cb.addEventListener("change", update);
+  update();
+}
+
+/* --------------------------- anneal settings toggle --------------------------- */
+function wireAnnealToggle() {
+  const btn = $("#anneal-toggle");
+  const panel = $("#anneal-settings");
+  if (!btn || !panel) return;
+  btn.addEventListener("click", () => {
+    panel.classList.toggle("open");
+    const caret = btn.querySelector(".summary-caret");
+    if (caret) caret.style.transform = panel.classList.contains("open") ? "rotate(180deg)" : "";
+  });
 }
 
 /* --------------------------- models --------------------------- */
@@ -118,7 +167,7 @@ function updateModelDots() {
     const key = pill.dataset.value;
     const dot = pill.querySelector(".model-dot");
     const m = state.models[key];
-    dot.className = "dot model-dot " + dotClass(m);
+    if (dot) dot.className = "dot model-dot " + dotClass(m);
     if (m) {
       pill.title = m.available
         ? `${m.display_name}: ready (T2V:${m.t2v_capable ? "yes" : "no"}, I2V:${m.i2v_capable ? "yes" : "no"})`
@@ -158,10 +207,8 @@ function applyModelConstraints() {
     }
   });
 
-  // Show motion field only for models that support it (LTX/Wan).
-  $("#motion-field").classList.toggle("hidden", state.model === "framepack" ? false : false);
   // Segment length only meaningful for multi-section models.
-  const segField = $("#segment").closest(".adv-field");
+  const segField = $("#segment") ? $("#segment").closest(".adv-field") : null;
   if (segField) segField.style.display = state.model === "framepack" ? "none" : "flex";
 
   updateFormHint();
@@ -187,14 +234,11 @@ async function refreshStatus() {
     if (data.connected) {
       dot.className = "dot dot-green";
       label.textContent = data.multi_gpu
-        ? `ComfyUI connected (${data.workers.filter(w => w.alive).length} workers)`
-        : "ComfyUI connected";
+        ? `Connected (${data.workers.filter(w => w.alive).length} workers)`
+        : "Connected";
     } else {
       dot.className = "dot dot-red";
-      label.textContent = "ComfyUI disconnected";
-    }
-    if (!data.ffmpeg) {
-      label.textContent += " · FFmpeg missing";
+      label.textContent = "Disconnected";
     }
     updateStatusBar(data);
   } catch (err) {
@@ -218,7 +262,7 @@ function updateStatusBar(data) {
     sbDot.className = "dot dot-red";
     $("#sb-conn").textContent = "ComfyUI disconnected";
   }
-  $("#sb-ffmpeg").textContent = "FFmpeg: " + (data.ffmpeg ? "ok" : "missing");
+  $("#sb-ffmpeg").textContent = "FFmpeg: " + (data.ffmpeg ? "ok" : "⚠ missing");
   if (data.multi_gpu && Array.isArray(data.workers)) {
     const alive = data.workers.filter((w) => w.alive).length;
     $("#sb-gpu").textContent = `GPU: ${alive}/${data.workers.length} workers`;
@@ -254,13 +298,14 @@ function setRefImage(file) {
   img.src = URL.createObjectURL(file);
   img.classList.remove("hidden");
   $("#dropzone-inner").classList.add("hidden");
+  $("#dropzone").classList.add("has-image");
 }
 
 /* --------------------------- advanced --------------------------- */
 function wireAdvanced() {
   const bind = (id, valId) => {
     const el = $(id), val = $(valId);
-    el.addEventListener("input", () => { val.textContent = el.value; });
+    if (el && val) el.addEventListener("input", () => { val.textContent = el.value; });
   };
   bind("#steps", "#steps-val");
   bind("#guidance", "#guidance-val");
@@ -301,10 +346,10 @@ function applyContinueFrom(clip) {
 
   // Preserve model / aspect / lip-sync / quality from the parent.
   const md = clip.metadata || {};
-  if (md.model_key) { selectPill("model-group", md.model_key); state.model = md.model_key; }
+  if (md.model_key) { selectPill("model-group", md.model_key); state.model = md.model_key; const b = $("#model-badge"); if (b) b.textContent = MODEL_LABELS[md.model_key] || md.model_key; }
   if (md.aspect_ratio) { selectPill("aspect-group", md.aspect_ratio); state.aspect_ratio = md.aspect_ratio; }
   if (md.quality) { selectPill("quality-group", md.quality); state.quality = md.quality; }
-  if (typeof md.lip_sync === "boolean") $("#lipsync").checked = md.lip_sync;
+  if (typeof md.lip_sync === "boolean") { $("#lipsync").checked = md.lip_sync; const ls = $("#lipsync-state"); if (ls) ls.textContent = md.lip_sync ? "ON" : "OFF"; }
   if (md.fps) $("#fps").value = String(md.fps);
   applyModelConstraints();
 }
@@ -336,6 +381,8 @@ function wireButtons() {
       window.open(state.currentResultClip.video_url, "_blank");
     }
   });
+  const brollJump = $("#broll-jump-btn");
+  if (brollJump) brollJump.addEventListener("click", () => openPanel("broll"));
 }
 
 /* --------------------------- generate --------------------------- */
@@ -398,6 +445,7 @@ async function generate() {
   if (linkAvatar) fd.append("avatar_id", linkAvatar);
   const linkVoice = $("#link-voice").value;
   if (linkVoice) fd.append("voice_id", linkVoice);
+
   const workerField = $("#worker-field");
   if (!workerField.classList.contains("hidden")) {
     fd.append("worker_index", $("#worker").value);
@@ -409,6 +457,7 @@ async function generate() {
   if (state.refFile) fd.append("image", state.refFile);
 
   btn.disabled = true;
+  btn.classList.add("generating");
   btn.textContent = "STARTING…";
 
   try {
@@ -432,6 +481,7 @@ async function generate() {
 function resetGenerateBtn() {
   const btn = $("#generate-btn");
   btn.disabled = false;
+  btn.classList.remove("generating");
   btn.textContent = "GENERATE 30s CLIP";
 }
 
@@ -441,6 +491,7 @@ function showProgress() {
   $("#output-card").classList.add("hidden");
   $("#progress-fill").style.width = "0%";
   $("#progress-section").textContent = "Starting…";
+  $("#progress-pct").textContent = "0%";
   $("#progress-eta").textContent = "";
   $("#progress-msg").textContent = "";
   $("#preview-frame").classList.add("hidden");
@@ -466,8 +517,9 @@ function openWebSocket(jobId) {
 function updateProgress(data) {
   const pct = Math.round((data.progress || 0) * 100);
   $("#progress-fill").style.width = pct + "%";
+  $("#progress-pct").textContent = pct + "%";
   $("#progress-section").textContent =
-    `Section ${data.current_section}/${data.total_sections} — ${pct}%`;
+    `Section ${data.current_section || 1}/${data.total_sections || 1}`;
   if (data.eta != null) {
     $("#progress-eta").textContent = "ETA " + formatTime(data.eta);
   }
@@ -503,6 +555,25 @@ async function pollJob(jobId) {
   }, 2000);
 }
 
+function renderMeta(clip) {
+  const strip = $("#meta-strip");
+  if (!strip) return;
+  const md = clip.metadata || {};
+  const modelName = MODEL_LABELS[md.model_key] || md.model || md.model_key || "—";
+  const pills = [
+    ["Model", modelName],
+    ["Seed", md.seed != null ? md.seed : "random"],
+    ["Res", md.resolution || "—"],
+    ["FPS", md.fps != null ? md.fps : "—"],
+    ["Quality", md.quality || "—"],
+    ["Sections", md.num_sections != null ? md.num_sections : "—"],
+    ["Lip-Sync", md.lip_sync ? "on" : "off"],
+  ];
+  strip.innerHTML = pills
+    .map(([k, v]) => `<span class="meta-pill">${k} <b>${escapeHtml(String(v))}</b></span>`)
+    .join("");
+}
+
 function onComplete(data) {
   resetGenerateBtn();
   $("#progress-card").classList.add("hidden");
@@ -513,11 +584,7 @@ function onComplete(data) {
   const video = $("#output-video");
   video.src = clip.video_url + "?t=" + Date.now();
   video.load();
-  const md = clip.metadata || {};
-  $("#output-meta").textContent =
-    `Model: ${md.model}\nMode: ${md.mode}\nSeed: ${md.seed ?? "random"}\n` +
-    `Resolution: ${md.resolution} @ ${md.fps}fps\nQuality: ${md.quality}\n` +
-    `Sections: ${md.num_sections}\nLip-Sync: ${md.lip_sync ? "on" : "off"}`;
+  renderMeta(clip);
   card.scrollIntoView({ behavior: "smooth" });
   refreshGallery();
 }
@@ -547,14 +614,20 @@ async function refreshGallery() {
     const data = await res.json();
     const gallery = $("#gallery");
     gallery.innerHTML = "";
-    (data.clips || []).forEach((clip) => {
+    const clips = data.clips || [];
+    if (!clips.length) {
+      gallery.innerHTML = `<div class="gallery-empty">No clips yet — generate your first 30-second clip above.</div>`;
+      return;
+    }
+    clips.forEach((clip) => {
       const item = document.createElement("div");
       item.className = "gallery-item";
       const md = clip.metadata || {};
+      const modelName = MODEL_LABELS[md.model_key] || md.model || "";
       item.innerHTML = `
         <img src="${clip.thumbnail_url || clip.first_frame_url || ""}" alt="clip" />
-        <div class="g-meta">${md.model || ""} · ${md.quality || ""}</div>
-        <button class="g-continue">Continue</button>`;
+        <div class="g-meta">${escapeHtml(modelName)} · ${escapeHtml(md.quality || "")}</div>
+        <button class="g-continue">Continue →</button>`;
       item.querySelector("img").addEventListener("click", () => playClip(clip));
       item.querySelector(".g-continue").addEventListener("click", (e) => {
         e.stopPropagation();
@@ -578,15 +651,12 @@ function playClip(clip) {
   const video = $("#output-video");
   video.src = clip.video_url + "?t=" + Date.now();
   video.load(); video.play();
-  const md = clip.metadata || {};
-  $("#output-meta").textContent =
-    `Model: ${md.model}\nSeed: ${md.seed ?? "random"}\nResolution: ${md.resolution} @ ${md.fps}fps`;
+  renderMeta(clip);
   card.scrollIntoView({ behavior: "smooth" });
 }
 
-
 /* =================================================================== */
-/* ==================  ENHANCEMENTS (appended)  ====================== */
+/* ==========================  PANELS & LIBRARIES  =================== */
 /* =================================================================== */
 
 /* --------------------------- pro-quality sliders --------------------------- */
@@ -626,7 +696,6 @@ function openPanel(name) {
   if (scrim) scrim.classList.remove("hidden");
   const tab = $(`.tab-btn[data-panel="${name}"]`);
   if (tab) tab.classList.add("active");
-  // Refresh data as the panel opens.
   if (name === "avatars") loadAvatars();
   else if (name === "voices") loadVoices();
   else if (name === "sequence") loadSequence();
@@ -661,7 +730,6 @@ async function apiJson(url, opts) {
     const msg = (body && (body.error || body.detail)) || `Request failed (${res.status})`;
     throw new Error(msg);
   }
-  // New routes wrap payload in {success, data, error}; unwrap when present.
   if (body && typeof body === "object" && "success" in body && "data" in body) {
     return body.data;
   }
@@ -669,11 +737,15 @@ async function apiJson(url, opts) {
 }
 
 /* --------------------------- avatars --------------------------- */
+let _avatars = [];
+
 async function loadAvatars() {
   try {
     const data = await apiJson("/api/avatars");
-    renderAvatars(data.avatars || []);
-    populateAvatarSelects(data.avatars || []);
+    _avatars = data.avatars || [];
+    renderAvatars(_avatars);
+    populateAvatarSelects(_avatars);
+    populateVoiceAvatarSelects(_avatars);
   } catch (err) {
     console.error("avatars load failed", err);
   }
@@ -682,32 +754,77 @@ async function loadAvatars() {
 function renderAvatars(avatars) {
   const grid = $("#avatar-grid");
   if (!grid) return;
+  const selected = $("#link-avatar") ? $("#link-avatar").value : "";
   grid.innerHTML = "";
   avatars.forEach((av) => {
     const cell = document.createElement("div");
     cell.className = "avatar-cell" + (av.placeholder ? " placeholder" : "");
+    if (!av.placeholder && av.id && av.id === selected) cell.classList.add("selected");
     if (av.placeholder) {
-      cell.innerHTML = `<div class="avatar-empty">＋<span>Empty slot</span></div>`;
+      cell.innerHTML = `<div class="avatar-empty">＋<span>Create Avatar</span></div>`;
+      cell.addEventListener("click", () => $("#avatar-name").focus());
     } else {
       cell.innerHTML = `
+        ${av.voice_id ? '<div class="avatar-badge">🎙 voice</div>' : ""}
         <img src="${av.thumbnail_url || av.image_url || ""}" alt="${escapeHtml(av.name)}" />
         <div class="avatar-name">${escapeHtml(av.name || "Unnamed")}</div>
-        ${av.voice_id ? '<div class="avatar-badge">🎙 voice</div>' : ""}
-        <button class="avatar-del" title="Delete">✕</button>`;
-      const del = cell.querySelector(".avatar-del");
-      del.addEventListener("click", () => deleteAvatar(av.id));
+        <div class="avatar-actions">
+          <button class="av-sel${av.id === selected ? " active" : ""}">Select</button>
+          <button class="av-edit" title="Rename">✎</button>
+          <button class="av-del" title="Delete">✕</button>
+        </div>`;
+      cell.querySelector(".av-sel").addEventListener("click", () => selectAvatar(av.id));
+      cell.querySelector(".av-edit").addEventListener("click", () => renameAvatar(av));
+      cell.querySelector(".av-del").addEventListener("click", () => deleteAvatar(av.id));
     }
     grid.appendChild(cell);
   });
 }
 
+function selectAvatar(avatarId) {
+  const sel = $("#link-avatar");
+  if (sel) sel.value = (sel.value === avatarId) ? "" : avatarId;
+  renderAvatars(_avatars);
+}
+
+async function renameAvatar(av) {
+  const name = prompt("Rename avatar:", av.name || "");
+  if (name == null) return;
+  try {
+    await apiJson("/api/avatars/" + av.id, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    loadAvatars();
+  } catch (err) {
+    alert("Rename failed: " + err.message);
+  }
+}
+
 function populateAvatarSelects(avatars) {
   const real = avatars.filter((a) => !a.placeholder && a.id);
   const linkSel = $("#link-avatar");
-  const voiceSel = $("#voice-avatar");
-  const fill = (sel, firstLabel) => {
+  if (!linkSel) return;
+  const prev = linkSel.value;
+  linkSel.innerHTML = `<option value="">No avatar</option>`;
+  real.forEach((a) => {
+    const opt = document.createElement("option");
+    opt.value = a.id;
+    opt.textContent = a.name || a.id;
+    linkSel.appendChild(opt);
+  });
+  if (prev) linkSel.value = prev;
+}
+
+function populateVoiceAvatarSelects(avatars) {
+  const real = avatars.filter((a) => !a.placeholder && a.id);
+  // Add-voice form select + any per-row assign selects.
+  const targets = [$("#voice-avatar"), ...$$(".voice-assign select")];
+  targets.forEach((sel) => {
     if (!sel) return;
     const prev = sel.value;
+    const firstLabel = sel.classList.contains("va-row") ? "Unassigned" : "Link to avatar (optional)";
     sel.innerHTML = `<option value="">${firstLabel}</option>`;
     real.forEach((a) => {
       const opt = document.createElement("option");
@@ -716,9 +833,7 @@ function populateAvatarSelects(avatars) {
       sel.appendChild(opt);
     });
     if (prev) sel.value = prev;
-  };
-  fill(linkSel, "No avatar");
-  fill(voiceSel, "Link to avatar (optional)");
+  });
 }
 
 async function deleteAvatar(avatarId) {
@@ -751,18 +866,31 @@ function renderVoices(voices) {
     list.innerHTML = `<div class="voice-empty">No voices yet.</div>`;
     return;
   }
+  const realAvatars = _avatars.filter((a) => !a.placeholder && a.id);
   voices.forEach((v) => {
     const row = document.createElement("div");
     row.className = "voice-row";
     const dur = v.duration_seconds ? `${Math.round(v.duration_seconds)}s` : "";
+    const options = ['<option value="">Unassigned</option>']
+      .concat(realAvatars.map((a) =>
+        `<option value="${a.id}" ${a.id === v.avatar_id ? "selected" : ""}>${escapeHtml(a.name || a.id)}</option>`))
+      .join("");
     row.innerHTML = `
-      <div class="voice-info">
-        <div class="voice-name">${escapeHtml(v.name || "Unnamed")}</div>
-        <div class="voice-meta">${escapeHtml(v.sample_filename || "")} ${dur}</div>
+      <div class="voice-top">
+        <span class="voice-ico">🎙</span>
+        <div class="voice-info">
+          <div class="voice-name">${escapeHtml(v.name || "Unnamed")}</div>
+          <div class="voice-meta">${escapeHtml(v.sample_filename || "")} ${dur}</div>
+        </div>
+        <button class="voice-del" title="Delete">✕</button>
       </div>
       ${v.sample_url ? `<audio controls preload="none" src="${v.sample_url}"></audio>` : ""}
-      <button class="voice-del" title="Delete">✕</button>`;
+      <div class="voice-assign">
+        <label>Avatar</label>
+        <select class="input va-row">${options}</select>
+      </div>`;
     row.querySelector(".voice-del").addEventListener("click", () => deleteVoice(v.id));
+    row.querySelector(".va-row").addEventListener("change", (e) => assignVoiceAvatar(v.id, e.target.value));
     list.appendChild(row);
   });
 }
@@ -781,6 +909,19 @@ function populateVoiceSelect(voices) {
   if (prev) sel.value = prev;
 }
 
+async function assignVoiceAvatar(voiceId, avatarId) {
+  try {
+    await apiJson("/api/voices/" + voiceId + "/assign-avatar", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ avatar_id: avatarId || null }),
+    });
+    loadAvatars();
+  } catch (err) {
+    alert("Assign failed: " + err.message);
+  }
+}
+
 async function deleteVoice(voiceId) {
   if (!voiceId) return;
   if (!confirm("Delete this voice?")) return;
@@ -794,7 +935,6 @@ async function deleteVoice(voiceId) {
 
 /* --------------------------- library + panel forms --------------------------- */
 function wireLibraryForms() {
-  // Avatar form.
   const avatarForm = $("#avatar-form");
   if (avatarForm) {
     avatarForm.addEventListener("submit", async (e) => {
@@ -818,7 +958,6 @@ function wireLibraryForms() {
     });
   }
 
-  // Voice form.
   const voiceForm = $("#voice-form");
   if (voiceForm) {
     voiceForm.addEventListener("submit", async (e) => {
@@ -845,52 +984,63 @@ function wireLibraryForms() {
     });
   }
 
-  // B-roll form.
   const brollForm = $("#broll-form");
   if (brollForm) {
-    brollForm.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      submitBroll();
-    });
+    brollForm.addEventListener("submit", (e) => { e.preventDefault(); submitBroll(); });
     const subject = $("#broll-subject");
-    const cat = $("#broll-category");
     if (subject) subject.addEventListener("input", updateBrollPreview);
-    if (cat) cat.addEventListener("change", updateBrollPreview);
   }
 
-  // Export form.
   const exportForm = $("#export-form");
   if (exportForm) {
-    exportForm.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      downloadExport();
-    });
+    exportForm.addEventListener("submit", (e) => { e.preventDefault(); downloadExport(); });
   }
 
-  // Output-card extra buttons.
   const seqAdd = $("#seq-add-btn");
   if (seqAdd) seqAdd.addEventListener("click", addCurrentClipToSequence);
   const anneal = $("#anneal-btn");
   if (anneal) anneal.addEventListener("click", annealCurrentClip);
 }
 
+/* --------------------------- export cards --------------------------- */
+function wireExportCards() {
+  $$(".export-card[data-value]").forEach((card) => {
+    card.addEventListener("click", () => {
+      $$(".export-card").forEach((c) => c.classList.remove("selected"));
+      card.classList.add("selected");
+      const hidden = $("#export-type");
+      if (hidden) hidden.value = card.dataset.value;
+    });
+  });
+}
+
 /* --------------------------- b-roll --------------------------- */
 let _brollCategories = [];
+let _brollSelected = null;
 
 async function loadBrollCategories() {
-  const sel = $("#broll-category");
-  if (!sel || sel.dataset.loaded === "1") return;
+  const box = $("#broll-category");
+  if (!box || box.dataset.loaded === "1") return;
   try {
     const data = await apiJson("/api/broll/categories");
     _brollCategories = data.categories || [];
-    sel.innerHTML = "";
-    _brollCategories.forEach((c) => {
-      const opt = document.createElement("option");
-      opt.value = c.value;
-      opt.textContent = c.label;
-      sel.appendChild(opt);
+    box.innerHTML = "";
+    _brollCategories.forEach((c, i) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "broll-cat" + (i === 0 ? " active" : "");
+      b.dataset.value = c.value;
+      b.textContent = c.label;
+      b.addEventListener("click", () => {
+        box.querySelectorAll(".broll-cat").forEach((x) => x.classList.remove("active"));
+        b.classList.add("active");
+        _brollSelected = c.value;
+        updateBrollPreview();
+      });
+      box.appendChild(b);
     });
-    sel.dataset.loaded = "1";
+    _brollSelected = _brollCategories.length ? _brollCategories[0].value : null;
+    box.dataset.loaded = "1";
     updateBrollPreview();
   } catch (err) {
     console.error("broll categories load failed", err);
@@ -900,9 +1050,8 @@ async function loadBrollCategories() {
 function updateBrollPreview() {
   const preview = $("#broll-preview");
   if (!preview) return;
-  const catVal = $("#broll-category").value;
   const subject = ($("#broll-subject").value || "").trim();
-  const cat = _brollCategories.find((c) => c.value === catVal);
+  const cat = _brollCategories.find((c) => c.value === _brollSelected);
   if (!subject) { preview.textContent = ""; return; }
   const prefix = cat ? cat.prompt_prefix : "";
   preview.textContent = prefix ? `${prefix} ${subject}` : subject;
@@ -917,11 +1066,12 @@ async function submitBroll() {
   const hint = $("#broll-hint");
   const subject = ($("#broll-subject").value || "").trim();
   if (!subject) { hint.textContent = "Enter a subject / description."; return; }
+  if (!_brollSelected) { hint.textContent = "Choose a category."; return; }
   const m = state.models[state.model];
   if (m && !m.available) { hint.textContent = `${m.display_name} is not ready.`; return; }
   const payload = {
     model: state.model,
-    category: $("#broll-category").value,
+    category: _brollSelected,
     subject,
     aspect_ratio: state.aspect_ratio,
     quality: state.quality,
@@ -937,9 +1087,8 @@ async function submitBroll() {
     });
     state.projectId = data.project_id;
     const n = (data.jobs || []).length;
-    hint.textContent = `Started ${n} b-roll job${n === 1 ? "" : "s"}. Watch the gallery for results.`;
+    hint.textContent = `Started ${n} b-roll job${n === 1 ? "" : "s"}. Results appear in the gallery.`;
     refreshStatus();
-    // Poll gallery a few times so results appear as they complete.
     let ticks = 0;
     const t = setInterval(() => {
       refreshGallery();
@@ -954,7 +1103,9 @@ async function submitBroll() {
 async function loadSequence() {
   const list = $("#seq-list");
   const empty = $("#seq-empty");
+  const proj = $("#seq-project");
   if (!list) return;
+  if (proj) proj.innerHTML = "Project: <b>" + (state.projectId ? escapeHtml(String(state.projectId).slice(0, 8)) : "—") + "</b>";
   if (!state.projectId) {
     list.innerHTML = "";
     if (empty) { empty.textContent = "No project yet. Generate a clip first."; empty.classList.remove("hidden"); }
@@ -974,7 +1125,7 @@ function renderSequence(items) {
   if (!list) return;
   list.innerHTML = "";
   if (!items.length) {
-    if (empty) { empty.textContent = "No items yet. Use “Add to Sequence” on a clip."; empty.classList.remove("hidden"); }
+    if (empty) { empty.textContent = "Generate a clip and click “＋ Sequence” to build your edit."; empty.classList.remove("hidden"); }
     return;
   }
   if (empty) empty.classList.add("hidden");
@@ -1060,14 +1211,13 @@ async function annealCurrentClip() {
       body: JSON.stringify({ model: state.model }),
     });
     state.projectId = data.project_id;
-    // Follow the bridge job's progress with the standard progress UI.
     state.currentJob = data.job_id;
     showProgress();
     openWebSocket(data.job_id);
   } catch (err) {
     alert("Bridge failed: " + err.message);
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = "⤳ Bridge to Next"; }
+    if (btn) { btn.disabled = false; btn.textContent = "⤳ Bridge"; }
   }
 }
 

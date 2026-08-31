@@ -16,6 +16,7 @@ venv/
 *.log
 .DS_Store
 
+
 # Runtime / tooling
 *.pid
 .sc.pid
