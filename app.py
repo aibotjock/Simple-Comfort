@@ -146,15 +146,36 @@ async def index():
 
 @app.get("/api/status")
 async def api_status():
-    await state.pool.refresh_health()
-    workers = state.pool.status()
-    connected = any(w["alive"] for w in workers)
-    return {
-        "connected": connected,
-        "workers": workers,
-        "multi_gpu": state.pool.is_multi,
-        "ffmpeg": _ffmpeg_ok(),
-    }
+    # Bulletproof: always return valid JSON with HTTP 200, never a 500 HTML
+    # page. The front-end treats connected:false gracefully as "Disconnected".
+    try:
+        pool = getattr(state, "pool", None)
+        if pool is None:
+            return {
+                "connected": False,
+                "workers": [],
+                "multi_gpu": False,
+                "ffmpeg": _ffmpeg_ok(),
+                "error": "worker pool not initialized",
+            }
+        await pool.refresh_health()
+        workers = pool.status()
+        connected = any(w["alive"] for w in workers)
+        return {
+            "connected": connected,
+            "workers": workers,
+            "multi_gpu": pool.is_multi,
+            "ffmpeg": _ffmpeg_ok(),
+        }
+    except Exception as exc:  # noqa: BLE001
+        log.exception("api_status failed")
+        return {
+            "connected": False,
+            "workers": [],
+            "multi_gpu": False,
+            "ffmpeg": False,
+            "error": str(exc),
+        }
 
 
 @app.get("/api/models")
@@ -192,8 +213,11 @@ async def api_last_clip():
 
 
 def _ffmpeg_ok() -> bool:
-    import ffmpeg_utils
-    return ffmpeg_utils.ffmpeg_available()
+    try:
+        import ffmpeg_utils
+        return bool(ffmpeg_utils.ffmpeg_available())
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _parse_int(value: Optional[str]) -> Optional[int]:

@@ -12,6 +12,21 @@ No cloud calls, no API keys, no telemetry — everything runs on your machine.
 
 ---
 
+## Quick Start
+
+1. Install **Python 3.10+**.
+2. Run `./setup.sh` (Linux/macOS) or `setup.bat` (Windows) — creates a virtual
+   environment and installs all dependencies.
+3. Install and start **ComfyUI** on port **8188**.
+4. Run `./launch.sh` (Linux/macOS), double-click `launch.bat` (Windows), or use
+   the desktop icon.
+5. Open <http://localhost:7788> in your browser.
+
+> **If you see "Server error" in the UI**, run `setup.sh` (or `setup.bat`) first
+> to install the required dependencies, then relaunch.
+
+---
+
 ## Features
 
 - **One-click 30s clips** — the app automatically splits generation into

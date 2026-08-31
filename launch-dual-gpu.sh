@@ -64,6 +64,13 @@ if [ -z "$COMFY_DIR" ]; then
 fi
 echo "[dual-gpu] Using ComfyUI at: $COMFY_DIR"
 
+# --- Activate venv if present ----------------------------------------------
+if [ -d "$APP_DIR/venv" ]; then
+    # shellcheck disable=SC1091
+    source "$APP_DIR/venv/bin/activate"
+    echo "[dual-gpu] Activated virtual environment: $APP_DIR/venv"
+fi
+
 # --- Pick a python ---------------------------------------------------------
 PYTHON=python3
 command -v "$PYTHON" >/dev/null 2>&1 || PYTHON=python
