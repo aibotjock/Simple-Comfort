@@ -41,7 +41,7 @@ document.addEventListener("DOMContentLoaded", () => {
   loadAvatars();
   loadVoices();
   loadBrollCategories();
-  setInterval(refreshStatus, 15000);
+  setInterval(refreshStatus, 5000);
 
   // Ctrl+Enter to generate.
   document.addEventListener("keydown", (e) => {
@@ -240,10 +240,13 @@ async function refreshStatus() {
       dot.className = "dot dot-red";
       label.textContent = "Disconnected";
     }
+    renderGpuChips(data);
     updateStatusBar(data);
   } catch (err) {
     $("#conn-dot").className = "dot dot-red";
     $("#conn-label").textContent = "Server error";
+    const chips = $("#gpu-chips");
+    if (chips) chips.hidden = true;
     const sbDot = $("#sb-dot");
     if (sbDot) {
       sbDot.className = "dot dot-red";
@@ -272,6 +275,54 @@ function updateStatusBar(data) {
   $("#sb-project").textContent = state.projectId
     ? "Project: " + String(state.projectId).slice(0, 8)
     : "No project";
+}
+
+/* Render one status chip per GPU in the header when multi-GPU is active.
+   Dot color: green = alive & idle, yellow = alive & busy, red = offline.
+   A small badge shows jobs_completed per GPU (e.g. "GPU 0 ✓12"). */
+function renderGpuChips(data) {
+  const wrap = $("#gpu-chips");
+  if (!wrap) return;
+  const workers = Array.isArray(data.workers) ? data.workers : [];
+  // Only show per-GPU chips for multi-GPU setups; keep single connection
+  // indicator for single-endpoint configs.
+  if (!data.multi_gpu || workers.length <= 1) {
+    wrap.hidden = true;
+    wrap.innerHTML = "";
+    return;
+  }
+  wrap.hidden = false;
+  wrap.innerHTML = "";
+  workers.forEach((w) => {
+    const chip = document.createElement("span");
+    chip.className = "gpu-chip";
+    let dotClass = "dot-red";
+    let title = "offline";
+    if (w.alive && w.busy) {
+      dotClass = "dot-yellow";
+      title = "busy";
+    } else if (w.alive) {
+      dotClass = "dot-green";
+      title = "idle";
+    }
+    chip.title = `${w.label}: ${title} — ${w.jobs_completed || 0} jobs completed`;
+
+    const dot = document.createElement("span");
+    dot.className = "dot " + dotClass;
+    chip.appendChild(dot);
+
+    const name = document.createElement("span");
+    name.className = "gpu-chip-name";
+    name.textContent = w.label;
+    chip.appendChild(name);
+
+    const badge = document.createElement("span");
+    badge.className = "gpu-chip-badge";
+    badge.textContent = "✓" + (w.jobs_completed || 0);
+    chip.appendChild(badge);
+
+    wrap.appendChild(chip);
+  });
 }
 
 /* --------------------------- dropzone --------------------------- */

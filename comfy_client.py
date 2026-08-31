@@ -282,6 +282,7 @@ class Worker:
     busy: bool = False
     alive: bool = False
     label: str = ""
+    jobs_completed: int = 0
 
 
 class WorkerPool:
@@ -295,6 +296,9 @@ class WorkerPool:
                        label=f"GPU {i}")
             )
         self._lock = asyncio.Lock()
+        # Round-robin cursor: which alive worker to hand out next when no
+        # preference is given. Ensures jobs strictly alternate across GPUs.
+        self._next_worker_index = 0
 
     @property
     def is_multi(self) -> bool:
@@ -314,15 +318,41 @@ class WorkerPool:
 
     async def acquire(self, preferred_index: Optional[int] = None,
                       wait: bool = True) -> Worker:
-        """Acquire a free, alive worker (least-busy). Waits if all busy."""
+        """Acquire a free, alive worker using strict round-robin.
+
+        When ``preferred_index`` is None, jobs are handed out in strict
+        round-robin order across the alive workers (job 1 -> GPU 0,
+        job 2 -> GPU 1, job 3 -> GPU 0, ...). If the round-robin target is
+        busy, any other free alive worker is used as a fallback rather than
+        blocking. When ``preferred_index`` is given, that worker is used if
+        free, otherwise another free alive worker is chosen.
+        """
         while True:
             async with self._lock:
-                candidates = [w for w in self.workers if w.alive and not w.busy]
-                if preferred_index is not None:
-                    pref = [w for w in candidates if w.index == preferred_index]
-                    candidates = pref or candidates
-                if candidates:
-                    worker = candidates[0]
+                free = [w for w in self.workers if w.alive and not w.busy]
+                if free:
+                    worker = None
+                    if preferred_index is not None:
+                        # Honour the caller's preference when possible.
+                        worker = next(
+                            (w for w in free if w.index == preferred_index),
+                            None,
+                        )
+                    else:
+                        # Strict round-robin over the alive workers.
+                        alive = [w for w in self.workers if w.alive]
+                        if alive:
+                            target = self._next_worker_index % len(alive)
+                            desired = alive[target]
+                            # Advance the cursor so the next job goes elsewhere.
+                            self._next_worker_index = (
+                                self._next_worker_index + 1
+                            ) % len(alive)
+                            if not desired.busy:
+                                worker = desired
+                    # Fallback: any free alive worker if the target was busy.
+                    if worker is None:
+                        worker = free[0]
                     worker.busy = True
                     return worker
             if not wait:
@@ -332,6 +362,7 @@ class WorkerPool:
     async def release(self, worker: Worker) -> None:
         async with self._lock:
             worker.busy = False
+            worker.jobs_completed += 1
 
     def status(self) -> List[Dict[str, Any]]:
         return [
@@ -341,6 +372,7 @@ class WorkerPool:
                 "endpoint": w.client.base_url,
                 "alive": w.alive,
                 "busy": w.busy,
+                "jobs_completed": w.jobs_completed,
             }
             for w in self.workers
         ]

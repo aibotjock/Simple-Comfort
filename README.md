@@ -66,6 +66,69 @@ You can also use the convenience launchers (no install required):
 
 ---
 
+## Dual GPU Setup (RTX 3090 / Multi-GPU)
+
+If you have two (or more) GPUs, Simple-Comfort can run one ComfyUI instance per
+GPU and **alternate jobs between them (round-robin)** — job 1 → GPU 0, job 2 →
+GPU 1, job 3 → GPU 0, and so on. This roughly doubles throughput when you queue
+multiple clips.
+
+### Quick start
+
+Instead of `python3 app.py`, run:
+
+```bash
+./launch-dual-gpu.sh
+```
+
+This script:
+
+1. Starts **ComfyUI on GPU 0** (`CUDA_VISIBLE_DEVICES=0`) on port **8188**.
+2. Starts **ComfyUI on GPU 1** (`CUDA_VISIBLE_DEVICES=1`) on port **8189**.
+3. Waits for both instances to respond.
+4. Writes `COMFY_ENDPOINTS=http://127.0.0.1:8188,http://127.0.0.1:8189` to `.env`.
+5. Launches Simple-Comfort, which automatically load-balances across both GPUs.
+
+When both ComfyUI instances are up, the header shows a **status chip per GPU**
+(`GPU 0`, `GPU 1`) with a colored dot — green = idle, yellow = busy, red =
+offline — and a `✓N` badge counting completed jobs on each GPU.
+
+On exit (Ctrl-C), both ComfyUI instances are stopped cleanly.
+
+### Single GPU
+
+For a single GPU, use:
+
+```bash
+./launch-single-gpu.sh
+```
+
+This starts one ComfyUI instance on GPU 0 (port 8188), writes
+`COMFY_ENDPOINTS=http://127.0.0.1:8188` to `.env`, and launches Simple-Comfort.
+
+### ComfyUI location
+
+The launchers look for ComfyUI in `~/ComfyUI`, `~/comfyui`, `/opt/ComfyUI`, and
+`~/AI/ComfyUI`. If yours is elsewhere, point them at it:
+
+```bash
+COMFYUI_PATH=/path/to/ComfyUI ./launch-dual-gpu.sh
+```
+
+### Manual configuration
+
+You can skip the launch scripts and configure endpoints yourself. Start your
+ComfyUI instances however you like, then set in `.env`:
+
+```ini
+COMFY_ENDPOINTS=http://127.0.0.1:8188,http://127.0.0.1:8189
+```
+
+Simple-Comfort treats each endpoint as an independent GPU worker and alternates
+jobs across all alive workers.
+
+---
+
 ## Desktop icon
 
 To install a proper desktop icon / application-menu entry:

@@ -148,6 +148,31 @@ button { font-family: inherit; cursor: pointer; }
   white-space: nowrap;
 }
 
+/* Per-GPU status chips (multi-GPU) */
+.gpu-chips { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.gpu-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-mid);
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.gpu-chip-name { letter-spacing: 0.02em; }
+.gpu-chip-badge {
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+  color: var(--text-lo, var(--text-mid));
+  background: var(--bg-base, rgba(0,0,0,0.25));
+  padding: 1px 5px;
+  border-radius: 999px;
+}
+
 /* Status dots */
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
 .dot-green  { background: var(--green);  box-shadow: 0 0 8px var(--green-glow); }
