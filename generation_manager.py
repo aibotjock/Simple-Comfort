@@ -175,7 +175,11 @@ class GenerationManager:
                 worker = await self.pool.acquire(preferred_index=worker_index)
                 log.info("Job %s assigned to %s", job.job_id, worker.label)
 
-                clip = self.projects.create_clip(project_id)
+                clip_type = extra_metadata.get("clip_type", "clip")
+                if clip_type in ("broll", "bridge"):
+                    clip = self.projects.create_typed_clip(project_id, clip_type)
+                else:
+                    clip = self.projects.create_clip(project_id)
                 job.clip_id = clip.clip_id
 
                 section_files: List[Path] = []
@@ -214,6 +218,9 @@ class GenerationManager:
                 await ffmpeg_utils.concat_videos(
                     section_files, clip.final_video, fps=params.fps
                 )
+
+                # Optional professional post-processing (denoise / interpolation).
+                await self._post_process(job, clip, params)
 
                 # Post-processing: frames, thumbnail, metadata.
                 await self._finalize_clip(clip, params, adapter, sections,
@@ -302,6 +309,59 @@ class GenerationManager:
         section_path.write_bytes(data)
         return section_path
 
+    async def _post_process(self, job: GenerationJob, clip: ClipRecord,
+                            params: GenerationParams) -> None:
+        """Apply optional professional post-processing to the final video.
+
+        Controlled by ``params.quality_params``:
+        * ``denoise`` (truthy)          -> hqdn3d spatial/temporal denoise.
+        * ``interpolate_fps`` (int/bool) -> minterpolate up to the target fps.
+        """
+        qp = params.quality_params or {}
+        if not qp:
+            return
+
+        # Denoise first, then interpolate (order matters for quality).
+        if qp.get("denoise"):
+            job.message = "Denoising..."
+            await self._publish(job)
+            tmp = clip.root_path / "_denoise.mp4"
+            try:
+                strength = qp.get("denoise_strength") or "2:1:2:3"
+                await ffmpeg_utils.denoise_video(
+                    clip.final_video, tmp, strength=str(strength)
+                )
+                tmp.replace(clip.final_video)
+                log.info("Job %s denoise applied", job.job_id)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Denoise failed for %s: %s", job.job_id, exc)
+                if tmp.exists():
+                    tmp.unlink(missing_ok=True)
+
+        interp = qp.get("interpolate_fps")
+        if interp:
+            # Allow interp to be a bool (use 2x current fps) or an explicit fps.
+            if isinstance(interp, bool):
+                target_fps = int((params.fps or 24) * 2)
+            else:
+                try:
+                    target_fps = int(interp)
+                except (TypeError, ValueError):
+                    target_fps = int((params.fps or 24) * 2)
+            job.message = f"Interpolating to {target_fps}fps..."
+            await self._publish(job)
+            tmp = clip.root_path / "_interp.mp4"
+            try:
+                await ffmpeg_utils.interpolate_fps(
+                    clip.final_video, tmp, target_fps
+                )
+                tmp.replace(clip.final_video)
+                log.info("Job %s interpolated to %dfps", job.job_id, target_fps)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Interpolation failed for %s: %s", job.job_id, exc)
+                if tmp.exists():
+                    tmp.unlink(missing_ok=True)
+
     async def _finalize_clip(self, clip: ClipRecord, params: GenerationParams,
                              adapter: ModelAdapter, sections,
                              parent_clip_id: Optional[str],
@@ -355,6 +415,14 @@ class GenerationManager:
             "num_sections": len(sections),
             "parent_clip_id": parent_clip_id,
             "generation_settings": extra_metadata.get("generation_settings", {}),
+            # Typed-clip + library linkage (b-roll / bridge / avatar / voice).
+            "type": extra_metadata.get("clip_type", "clip"),
+            "broll_category": extra_metadata.get("broll_category"),
+            "avatar_id": extra_metadata.get("avatar_id"),
+            "voice_id": extra_metadata.get("voice_id"),
+            "variant_index": extra_metadata.get("variant_index"),
+            "target_seconds": params.target_seconds,
+            "quality_params": params.quality_params or {},
         }
         self.projects.save_clip_metadata(clip, metadata)
 

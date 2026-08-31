@@ -121,7 +121,7 @@ Icon=simple-comfort
 Terminal=false
 StartupNotify=true
 StartupWMClass=simple-comfort
-Categories=Graphics;Video;
+Categories=AudioVideo;Video;
 Keywords=AI;Video;ComfyUI;Generation;
 EOF
     chmod +x "$DESKTOP_DEST"

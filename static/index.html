@@ -165,6 +165,55 @@
         </div>
       </details>
 
+      <!-- Professional quality -->
+      <details class="advanced pro-quality">
+        <summary>✦ Professional Quality</summary>
+        <div class="pro-grid">
+          <div class="field-row pro-row">
+            <label for="pro-denoise">Denoise (hqdn3d)</label>
+            <label class="switch">
+              <input type="checkbox" id="pro-denoise" />
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="field-row pro-row">
+            <label for="pro-interp">Smooth motion (interpolate)</label>
+            <select id="pro-interp" class="input pro-select">
+              <option value="">Off</option>
+              <option value="30">30 fps</option>
+              <option value="48">48 fps</option>
+              <option value="60">60 fps</option>
+            </select>
+          </div>
+          <div class="adv-field">
+            <label for="pro-camera">Camera motion <span class="val" id="pro-camera-val">0.5</span></label>
+            <input type="range" id="pro-camera" min="0" max="1" step="0.1" value="0.5" />
+          </div>
+          <div class="adv-field">
+            <label for="pro-face">Face stability <span class="val" id="pro-face-val">0.7</span></label>
+            <input type="range" id="pro-face" min="0" max="1" step="0.1" value="0.7" />
+          </div>
+          <div class="adv-field" id="pro-upscale-field">
+            <label for="pro-upscale">Upscale <span class="val" id="pro-upscale-val">1.0</span></label>
+            <input type="range" id="pro-upscale" min="1" max="2" step="0.25" value="1.0" />
+          </div>
+          <div class="adv-field" id="pro-antidrift-field">
+            <label for="pro-antidrift">Anti-drift <span class="val" id="pro-antidrift-val">1.0</span></label>
+            <input type="range" id="pro-antidrift" min="0" max="2" step="0.1" value="1.0" />
+          </div>
+        </div>
+        <div class="pro-note">These controls apply only where the selected model / FFmpeg supports them. Denoise &amp; interpolation are applied as post-processing.</div>
+      </details>
+
+      <!-- Optional avatar / voice linkage -->
+      <div class="field">
+        <label class="field-label">Link Avatar &amp; Voice <small>(optional)</small></label>
+        <div class="link-row">
+          <select id="link-avatar" class="input"><option value="">No avatar</option></select>
+          <select id="link-voice" class="input"><option value="">No voice</option></select>
+        </div>
+      </div>
+
       <button class="btn-primary" id="generate-btn">GENERATE 30s CLIP</button>
       <div class="hint" id="form-hint"></div>
     </section>
@@ -188,6 +237,8 @@
         <button class="btn-secondary" id="play-btn">▶ Play</button>
         <button class="btn-secondary" id="open-btn">📁 Open Output</button>
         <button class="btn-secondary" id="continue-btn">→ Continue From This Clip</button>
+        <button class="btn-secondary" id="seq-add-btn">＋ Add to Sequence</button>
+        <button class="btn-secondary" id="anneal-btn">⤳ Bridge to Next</button>
       </div>
       <div class="output-meta" id="output-meta"></div>
     </section>
@@ -198,6 +249,124 @@
       <div class="gallery" id="gallery"></div>
     </section>
   </main>
+
+  <!-- ============ SLIDING PANELS ============ -->
+  <div class="panel-scrim hidden" id="panel-scrim"></div>
+
+  <!-- Avatars -->
+  <aside class="side-panel" id="panel-avatars" aria-hidden="true">
+    <div class="panel-head">
+      <h3>Avatar Library</h3>
+      <button class="panel-close" data-panel="avatars">✕</button>
+    </div>
+    <div class="panel-body">
+      <div class="avatar-grid" id="avatar-grid"></div>
+      <form class="mini-form" id="avatar-form">
+        <h4>Add Avatar</h4>
+        <input type="text" id="avatar-name" class="input" placeholder="Avatar name" />
+        <input type="file" id="avatar-image" class="input" accept="image/*" />
+        <textarea id="avatar-notes" class="textarea" rows="2" placeholder="Notes (optional)"></textarea>
+        <button type="submit" class="btn-primary">Save Avatar</button>
+        <div class="mini-hint" id="avatar-hint"></div>
+      </form>
+    </div>
+  </aside>
+
+  <!-- Voices -->
+  <aside class="side-panel" id="panel-voices" aria-hidden="true">
+    <div class="panel-head">
+      <h3>Voice Library</h3>
+      <button class="panel-close" data-panel="voices">✕</button>
+    </div>
+    <div class="panel-body">
+      <div class="voice-list" id="voice-list"></div>
+      <form class="mini-form" id="voice-form">
+        <h4>Add Voice</h4>
+        <input type="text" id="voice-name" class="input" placeholder="Voice name" />
+        <input type="file" id="voice-sample" class="input" accept=".wav,.mp3,.m4a,audio/*" />
+        <select id="voice-avatar" class="input"><option value="">Link to avatar (optional)</option></select>
+        <textarea id="voice-notes" class="textarea" rows="2" placeholder="Notes (optional)"></textarea>
+        <button type="submit" class="btn-primary">Save Voice</button>
+        <div class="mini-hint" id="voice-hint"></div>
+      </form>
+    </div>
+  </aside>
+
+  <!-- B-Roll -->
+  <aside class="side-panel" id="panel-broll" aria-hidden="true">
+    <div class="panel-head">
+      <h3>B-Roll Generator</h3>
+      <button class="panel-close" data-panel="broll">✕</button>
+    </div>
+    <div class="panel-body">
+      <form class="mini-form" id="broll-form">
+        <label class="field-label">Category</label>
+        <select id="broll-category" class="input"></select>
+        <label class="field-label">Subject / description</label>
+        <textarea id="broll-subject" class="textarea" rows="3" placeholder="e.g. a sleek smartphone rotating on a pedestal"></textarea>
+        <label class="field-label">Variants</label>
+        <div class="pill-group" id="broll-variants" data-name="broll_variants">
+          <button type="button" class="pill active" data-value="1">1</button>
+          <button type="button" class="pill" data-value="2">2</button>
+          <button type="button" class="pill" data-value="3">3</button>
+        </div>
+        <div class="broll-preview" id="broll-preview"></div>
+        <button type="submit" class="btn-primary">Generate B-Roll</button>
+        <div class="mini-hint" id="broll-hint"></div>
+      </form>
+      <div class="broll-results" id="broll-results"></div>
+    </div>
+  </aside>
+
+  <!-- Sequence -->
+  <aside class="side-panel" id="panel-sequence" aria-hidden="true">
+    <div class="panel-head">
+      <h3>Sequence</h3>
+      <button class="panel-close" data-panel="sequence">✕</button>
+    </div>
+    <div class="panel-body">
+      <div class="seq-list" id="seq-list"></div>
+      <div class="seq-empty" id="seq-empty">No items yet. Use “Add to Sequence” on a clip.</div>
+    </div>
+  </aside>
+
+  <!-- Export -->
+  <aside class="side-panel" id="panel-export" aria-hidden="true">
+    <div class="panel-head">
+      <h3>Export / Handoff</h3>
+      <button class="panel-close" data-panel="export">✕</button>
+    </div>
+    <div class="panel-body">
+      <form class="mini-form" id="export-form">
+        <label class="field-label">Export type</label>
+        <select id="export-type" class="input">
+          <option value="video_only">Video only</option>
+          <option value="lipsync_package">Lip-sync package</option>
+          <option value="project_package" selected>Full project package</option>
+        </select>
+        <div class="export-note">Exports every finished clip in the current project as a downloadable .zip.</div>
+        <button type="submit" class="btn-primary">Download Export</button>
+        <div class="mini-hint" id="export-hint"></div>
+      </form>
+    </div>
+  </aside>
+
+  <!-- ============ BOTTOM TAB BAR ============ -->
+  <nav class="tab-bar">
+    <button class="tab-btn" data-panel="avatars"><span class="tab-ico">👤</span>Avatars</button>
+    <button class="tab-btn" data-panel="voices"><span class="tab-ico">🎙</span>Voices</button>
+    <button class="tab-btn" data-panel="broll"><span class="tab-ico">🎬</span>B-Roll</button>
+    <button class="tab-btn" data-panel="sequence"><span class="tab-ico">📑</span>Sequence</button>
+    <button class="tab-btn" data-panel="export"><span class="tab-ico">⬇</span>Export</button>
+  </nav>
+
+  <!-- ============ STATUS BAR ============ -->
+  <div class="status-bar" id="status-bar">
+    <span class="sb-item"><span class="dot dot-yellow" id="sb-dot"></span><span id="sb-conn">Checking…</span></span>
+    <span class="sb-item" id="sb-ffmpeg">FFmpeg: —</span>
+    <span class="sb-item" id="sb-gpu">GPU: —</span>
+    <span class="sb-item" id="sb-project">No project</span>
+  </div>
 
   <script src="/static/app.js"></script>
 </body>

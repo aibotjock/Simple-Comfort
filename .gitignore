@@ -15,3 +15,8 @@ venv/
 # Logs & OS cruft
 *.log
 .DS_Store
+
+# Runtime / tooling
+*.pid
+.sc.pid
+.abacus.donotdelete

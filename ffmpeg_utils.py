@@ -217,6 +217,64 @@ async def create_thumbnail(video_path: Path, output_path: Path,
     return output_path
 
 
+async def interpolate_fps(input_path: Path, output_path: Path,
+                          target_fps: int) -> Path:
+    """Motion-interpolate a video up to ``target_fps`` using minterpolate.
+
+    Uses ffmpeg's ``minterpolate`` filter (motion-compensated frame
+    interpolation) to synthesise intermediate frames for smoother motion.
+    """
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+    if not input_path.exists():
+        raise FFmpegError(f"Video not found for interpolation: {input_path}")
+    if target_fps <= 0:
+        raise FFmpegError("target_fps must be a positive integer")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    vf = (
+        f"minterpolate=fps={int(target_fps)}:mi_mode=mci:"
+        "mc_mode=aobmc:me_mode=bidir:vsbmc=1"
+    )
+    cmd = [
+        _binary("ffmpeg"), "-y",
+        "-i", str(input_path),
+        "-vf", vf,
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-an", str(output_path),
+    ]
+    await _run(cmd)
+    if not output_path.exists():
+        raise FFmpegError("Frame interpolation completed but output is missing")
+    return output_path
+
+
+async def denoise_video(input_path: Path, output_path: Path,
+                        strength: str = "2:1:2:3") -> Path:
+    """Apply high-quality temporal/spatial denoising via ``hqdn3d``.
+
+    ``strength`` is the hqdn3d parameter string
+    (luma_spatial:chroma_spatial:luma_tmp:chroma_tmp).
+    """
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+    if not input_path.exists():
+        raise FFmpegError(f"Video not found for denoise: {input_path}")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        _binary("ffmpeg"), "-y",
+        "-i", str(input_path),
+        "-vf", f"hqdn3d={strength}",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-an", str(output_path),
+    ]
+    await _run(cmd)
+    if not output_path.exists():
+        raise FFmpegError("Denoise completed but output is missing")
+    return output_path
+
+
 def ffmpeg_available() -> bool:
     """Return True if both ffmpeg and ffprobe are on PATH."""
     return bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))

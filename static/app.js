@@ -24,10 +24,16 @@ document.addEventListener("DOMContentLoaded", () => {
   wirePillGroups();
   wireDropzone();
   wireAdvanced();
+  wireProQuality();
   wireButtons();
+  wirePanels();
+  wireLibraryForms();
   refreshStatus();
   refreshModels();
   refreshGallery();
+  loadAvatars();
+  loadVoices();
+  loadBrollCategories();
   setInterval(refreshStatus, 15000);
 
   // Ctrl+Enter to generate.
@@ -190,10 +196,38 @@ async function refreshStatus() {
     if (!data.ffmpeg) {
       label.textContent += " · FFmpeg missing";
     }
+    updateStatusBar(data);
   } catch (err) {
     $("#conn-dot").className = "dot dot-red";
     $("#conn-label").textContent = "Server error";
+    const sbDot = $("#sb-dot");
+    if (sbDot) {
+      sbDot.className = "dot dot-red";
+      $("#sb-conn").textContent = "Server error";
+    }
   }
+}
+
+function updateStatusBar(data) {
+  const sbDot = $("#sb-dot");
+  if (!sbDot) return;
+  if (data.connected) {
+    sbDot.className = "dot dot-green";
+    $("#sb-conn").textContent = "ComfyUI connected";
+  } else {
+    sbDot.className = "dot dot-red";
+    $("#sb-conn").textContent = "ComfyUI disconnected";
+  }
+  $("#sb-ffmpeg").textContent = "FFmpeg: " + (data.ffmpeg ? "ok" : "missing");
+  if (data.multi_gpu && Array.isArray(data.workers)) {
+    const alive = data.workers.filter((w) => w.alive).length;
+    $("#sb-gpu").textContent = `GPU: ${alive}/${data.workers.length} workers`;
+  } else {
+    $("#sb-gpu").textContent = "GPU: " + (data.connected ? "1 worker" : "—");
+  }
+  $("#sb-project").textContent = state.projectId
+    ? "Project: " + String(state.projectId).slice(0, 8)
+    : "No project";
 }
 
 /* --------------------------- dropzone --------------------------- */
@@ -349,6 +383,21 @@ async function generate() {
   }
   fd.append("segment_length", $("#segment").value);
   fd.append("motion_strength", $("#motion").value);
+
+  // Professional quality controls.
+  fd.append("denoise", $("#pro-denoise").checked ? "true" : "false");
+  const interp = $("#pro-interp").value;
+  if (interp) fd.append("interpolate_fps", interp);
+  fd.append("camera_motion", $("#pro-camera").value);
+  fd.append("face_stability", $("#pro-face").value);
+  fd.append("upscale", $("#pro-upscale").value);
+  fd.append("anti_drift", $("#pro-antidrift").value);
+
+  // Optional avatar / voice linkage.
+  const linkAvatar = $("#link-avatar").value;
+  if (linkAvatar) fd.append("avatar_id", linkAvatar);
+  const linkVoice = $("#link-voice").value;
+  if (linkVoice) fd.append("voice_id", linkVoice);
   const workerField = $("#worker-field");
   if (!workerField.classList.contains("hidden")) {
     fd.append("worker_index", $("#worker").value);
@@ -533,4 +582,538 @@ function playClip(clip) {
   $("#output-meta").textContent =
     `Model: ${md.model}\nSeed: ${md.seed ?? "random"}\nResolution: ${md.resolution} @ ${md.fps}fps`;
   card.scrollIntoView({ behavior: "smooth" });
+}
+
+
+/* =================================================================== */
+/* ==================  ENHANCEMENTS (appended)  ====================== */
+/* =================================================================== */
+
+/* --------------------------- pro-quality sliders --------------------------- */
+function wireProQuality() {
+  const bind = (id, valId) => {
+    const el = $(id), val = $(valId);
+    if (el && val) el.addEventListener("input", () => { val.textContent = el.value; });
+  };
+  bind("#pro-camera", "#pro-camera-val");
+  bind("#pro-face", "#pro-face-val");
+  bind("#pro-upscale", "#pro-upscale-val");
+  bind("#pro-antidrift", "#pro-antidrift-val");
+}
+
+/* --------------------------- sliding panels / tabs --------------------------- */
+function wirePanels() {
+  const scrim = $("#panel-scrim");
+  $$(".tab-btn[data-panel]").forEach((btn) => {
+    btn.addEventListener("click", () => togglePanel(btn.dataset.panel));
+  });
+  $$(".panel-close[data-panel]").forEach((btn) => {
+    btn.addEventListener("click", () => closePanels());
+  });
+  if (scrim) scrim.addEventListener("click", () => closePanels());
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closePanels();
+  });
+}
+
+function openPanel(name) {
+  closePanels();
+  const panel = $("#panel-" + name);
+  const scrim = $("#panel-scrim");
+  if (!panel) return;
+  panel.classList.add("open");
+  panel.setAttribute("aria-hidden", "false");
+  if (scrim) scrim.classList.remove("hidden");
+  const tab = $(`.tab-btn[data-panel="${name}"]`);
+  if (tab) tab.classList.add("active");
+  // Refresh data as the panel opens.
+  if (name === "avatars") loadAvatars();
+  else if (name === "voices") loadVoices();
+  else if (name === "sequence") loadSequence();
+  else if (name === "broll") loadBrollCategories();
+}
+
+function togglePanel(name) {
+  const panel = $("#panel-" + name);
+  if (panel && panel.classList.contains("open")) {
+    closePanels();
+  } else {
+    openPanel(name);
+  }
+}
+
+function closePanels() {
+  $$(".side-panel").forEach((p) => {
+    p.classList.remove("open");
+    p.setAttribute("aria-hidden", "true");
+  });
+  $$(".tab-btn").forEach((t) => t.classList.remove("active"));
+  const scrim = $("#panel-scrim");
+  if (scrim) scrim.classList.add("hidden");
+}
+
+/* --------------------------- envelope helper --------------------------- */
+async function apiJson(url, opts) {
+  const res = await fetch(url, opts);
+  let body = null;
+  try { body = await res.json(); } catch (e) { body = null; }
+  if (!res.ok || (body && body.success === false)) {
+    const msg = (body && (body.error || body.detail)) || `Request failed (${res.status})`;
+    throw new Error(msg);
+  }
+  // New routes wrap payload in {success, data, error}; unwrap when present.
+  if (body && typeof body === "object" && "success" in body && "data" in body) {
+    return body.data;
+  }
+  return body;
+}
+
+/* --------------------------- avatars --------------------------- */
+async function loadAvatars() {
+  try {
+    const data = await apiJson("/api/avatars");
+    renderAvatars(data.avatars || []);
+    populateAvatarSelects(data.avatars || []);
+  } catch (err) {
+    console.error("avatars load failed", err);
+  }
+}
+
+function renderAvatars(avatars) {
+  const grid = $("#avatar-grid");
+  if (!grid) return;
+  grid.innerHTML = "";
+  avatars.forEach((av) => {
+    const cell = document.createElement("div");
+    cell.className = "avatar-cell" + (av.placeholder ? " placeholder" : "");
+    if (av.placeholder) {
+      cell.innerHTML = `<div class="avatar-empty">＋<span>Empty slot</span></div>`;
+    } else {
+      cell.innerHTML = `
+        <img src="${av.thumbnail_url || av.image_url || ""}" alt="${escapeHtml(av.name)}" />
+        <div class="avatar-name">${escapeHtml(av.name || "Unnamed")}</div>
+        ${av.voice_id ? '<div class="avatar-badge">🎙 voice</div>' : ""}
+        <button class="avatar-del" title="Delete">✕</button>`;
+      const del = cell.querySelector(".avatar-del");
+      del.addEventListener("click", () => deleteAvatar(av.id));
+    }
+    grid.appendChild(cell);
+  });
+}
+
+function populateAvatarSelects(avatars) {
+  const real = avatars.filter((a) => !a.placeholder && a.id);
+  const linkSel = $("#link-avatar");
+  const voiceSel = $("#voice-avatar");
+  const fill = (sel, firstLabel) => {
+    if (!sel) return;
+    const prev = sel.value;
+    sel.innerHTML = `<option value="">${firstLabel}</option>`;
+    real.forEach((a) => {
+      const opt = document.createElement("option");
+      opt.value = a.id;
+      opt.textContent = a.name || a.id;
+      sel.appendChild(opt);
+    });
+    if (prev) sel.value = prev;
+  };
+  fill(linkSel, "No avatar");
+  fill(voiceSel, "Link to avatar (optional)");
+}
+
+async function deleteAvatar(avatarId) {
+  if (!avatarId) return;
+  if (!confirm("Delete this avatar?")) return;
+  try {
+    await apiJson("/api/avatars/" + avatarId, { method: "DELETE" });
+    loadAvatars();
+  } catch (err) {
+    alert("Delete failed: " + err.message);
+  }
+}
+
+/* --------------------------- voices --------------------------- */
+async function loadVoices() {
+  try {
+    const data = await apiJson("/api/voices");
+    renderVoices(data.voices || []);
+    populateVoiceSelect(data.voices || []);
+  } catch (err) {
+    console.error("voices load failed", err);
+  }
+}
+
+function renderVoices(voices) {
+  const list = $("#voice-list");
+  if (!list) return;
+  list.innerHTML = "";
+  if (!voices.length) {
+    list.innerHTML = `<div class="voice-empty">No voices yet.</div>`;
+    return;
+  }
+  voices.forEach((v) => {
+    const row = document.createElement("div");
+    row.className = "voice-row";
+    const dur = v.duration_seconds ? `${Math.round(v.duration_seconds)}s` : "";
+    row.innerHTML = `
+      <div class="voice-info">
+        <div class="voice-name">${escapeHtml(v.name || "Unnamed")}</div>
+        <div class="voice-meta">${escapeHtml(v.sample_filename || "")} ${dur}</div>
+      </div>
+      ${v.sample_url ? `<audio controls preload="none" src="${v.sample_url}"></audio>` : ""}
+      <button class="voice-del" title="Delete">✕</button>`;
+    row.querySelector(".voice-del").addEventListener("click", () => deleteVoice(v.id));
+    list.appendChild(row);
+  });
+}
+
+function populateVoiceSelect(voices) {
+  const sel = $("#link-voice");
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = `<option value="">No voice</option>`;
+  voices.forEach((v) => {
+    const opt = document.createElement("option");
+    opt.value = v.id;
+    opt.textContent = v.name || v.id;
+    sel.appendChild(opt);
+  });
+  if (prev) sel.value = prev;
+}
+
+async function deleteVoice(voiceId) {
+  if (!voiceId) return;
+  if (!confirm("Delete this voice?")) return;
+  try {
+    await apiJson("/api/voices/" + voiceId, { method: "DELETE" });
+    loadVoices();
+  } catch (err) {
+    alert("Delete failed: " + err.message);
+  }
+}
+
+/* --------------------------- library + panel forms --------------------------- */
+function wireLibraryForms() {
+  // Avatar form.
+  const avatarForm = $("#avatar-form");
+  if (avatarForm) {
+    avatarForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const hint = $("#avatar-hint");
+      const file = $("#avatar-image").files[0];
+      if (!file) { hint.textContent = "Please choose an image."; return; }
+      const fd = new FormData();
+      fd.append("name", $("#avatar-name").value.trim());
+      fd.append("notes", $("#avatar-notes").value.trim());
+      fd.append("image", file);
+      hint.textContent = "Saving…";
+      try {
+        await apiJson("/api/avatars", { method: "POST", body: fd });
+        avatarForm.reset();
+        hint.textContent = "Saved.";
+        loadAvatars();
+      } catch (err) {
+        hint.textContent = err.message;
+      }
+    });
+  }
+
+  // Voice form.
+  const voiceForm = $("#voice-form");
+  if (voiceForm) {
+    voiceForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const hint = $("#voice-hint");
+      const file = $("#voice-sample").files[0];
+      if (!file) { hint.textContent = "Please choose an audio file."; return; }
+      const fd = new FormData();
+      fd.append("name", $("#voice-name").value.trim());
+      fd.append("notes", $("#voice-notes").value.trim());
+      const avatarId = $("#voice-avatar").value;
+      if (avatarId) fd.append("avatar_id", avatarId);
+      fd.append("sample", file);
+      hint.textContent = "Saving…";
+      try {
+        await apiJson("/api/voices", { method: "POST", body: fd });
+        voiceForm.reset();
+        hint.textContent = "Saved.";
+        loadVoices();
+        loadAvatars();
+      } catch (err) {
+        hint.textContent = err.message;
+      }
+    });
+  }
+
+  // B-roll form.
+  const brollForm = $("#broll-form");
+  if (brollForm) {
+    brollForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      submitBroll();
+    });
+    const subject = $("#broll-subject");
+    const cat = $("#broll-category");
+    if (subject) subject.addEventListener("input", updateBrollPreview);
+    if (cat) cat.addEventListener("change", updateBrollPreview);
+  }
+
+  // Export form.
+  const exportForm = $("#export-form");
+  if (exportForm) {
+    exportForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      downloadExport();
+    });
+  }
+
+  // Output-card extra buttons.
+  const seqAdd = $("#seq-add-btn");
+  if (seqAdd) seqAdd.addEventListener("click", addCurrentClipToSequence);
+  const anneal = $("#anneal-btn");
+  if (anneal) anneal.addEventListener("click", annealCurrentClip);
+}
+
+/* --------------------------- b-roll --------------------------- */
+let _brollCategories = [];
+
+async function loadBrollCategories() {
+  const sel = $("#broll-category");
+  if (!sel || sel.dataset.loaded === "1") return;
+  try {
+    const data = await apiJson("/api/broll/categories");
+    _brollCategories = data.categories || [];
+    sel.innerHTML = "";
+    _brollCategories.forEach((c) => {
+      const opt = document.createElement("option");
+      opt.value = c.value;
+      opt.textContent = c.label;
+      sel.appendChild(opt);
+    });
+    sel.dataset.loaded = "1";
+    updateBrollPreview();
+  } catch (err) {
+    console.error("broll categories load failed", err);
+  }
+}
+
+function updateBrollPreview() {
+  const preview = $("#broll-preview");
+  if (!preview) return;
+  const catVal = $("#broll-category").value;
+  const subject = ($("#broll-subject").value || "").trim();
+  const cat = _brollCategories.find((c) => c.value === catVal);
+  if (!subject) { preview.textContent = ""; return; }
+  const prefix = cat ? cat.prompt_prefix : "";
+  preview.textContent = prefix ? `${prefix} ${subject}` : subject;
+}
+
+function selectedBrollVariants() {
+  const active = $("#broll-variants .pill.active");
+  return active ? parseInt(active.dataset.value, 10) || 1 : 1;
+}
+
+async function submitBroll() {
+  const hint = $("#broll-hint");
+  const subject = ($("#broll-subject").value || "").trim();
+  if (!subject) { hint.textContent = "Enter a subject / description."; return; }
+  const m = state.models[state.model];
+  if (m && !m.available) { hint.textContent = `${m.display_name} is not ready.`; return; }
+  const payload = {
+    model: state.model,
+    category: $("#broll-category").value,
+    subject,
+    aspect_ratio: state.aspect_ratio,
+    quality: state.quality,
+    variants: selectedBrollVariants(),
+    project_id: state.projectId || undefined,
+  };
+  hint.textContent = "Submitting…";
+  try {
+    const data = await apiJson("/api/broll/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    state.projectId = data.project_id;
+    const n = (data.jobs || []).length;
+    hint.textContent = `Started ${n} b-roll job${n === 1 ? "" : "s"}. Watch the gallery for results.`;
+    refreshStatus();
+    // Poll gallery a few times so results appear as they complete.
+    let ticks = 0;
+    const t = setInterval(() => {
+      refreshGallery();
+      if (++ticks > 30) clearInterval(t);
+    }, 4000);
+  } catch (err) {
+    hint.textContent = err.message;
+  }
+}
+
+/* --------------------------- sequence --------------------------- */
+async function loadSequence() {
+  const list = $("#seq-list");
+  const empty = $("#seq-empty");
+  if (!list) return;
+  if (!state.projectId) {
+    list.innerHTML = "";
+    if (empty) { empty.textContent = "No project yet. Generate a clip first."; empty.classList.remove("hidden"); }
+    return;
+  }
+  try {
+    const data = await apiJson("/api/sequence/" + state.projectId);
+    renderSequence(data.sequence || []);
+  } catch (err) {
+    console.error("sequence load failed", err);
+  }
+}
+
+function renderSequence(items) {
+  const list = $("#seq-list");
+  const empty = $("#seq-empty");
+  if (!list) return;
+  list.innerHTML = "";
+  if (!items.length) {
+    if (empty) { empty.textContent = "No items yet. Use “Add to Sequence” on a clip."; empty.classList.remove("hidden"); }
+    return;
+  }
+  if (empty) empty.classList.add("hidden");
+  items.forEach((it, idx) => {
+    const row = document.createElement("div");
+    row.className = "seq-row";
+    row.innerHTML = `
+      <span class="seq-idx">${idx + 1}</span>
+      <img class="seq-thumb" src="${it.thumbnail_url || ""}" alt="" />
+      <div class="seq-info">
+        <div class="seq-label">${escapeHtml(it.label || it.clip_id || "clip")}</div>
+        <div class="seq-type">${escapeHtml(it.type || "clip")}</div>
+      </div>
+      <div class="seq-actions">
+        <button class="seq-up" title="Move up" ${idx === 0 ? "disabled" : ""}>▲</button>
+        <button class="seq-down" title="Move down" ${idx === items.length - 1 ? "disabled" : ""}>▼</button>
+        <button class="seq-del" title="Remove">✕</button>
+      </div>`;
+    row.querySelector(".seq-up").addEventListener("click", () => moveSequenceItem(it.id, "up"));
+    row.querySelector(".seq-down").addEventListener("click", () => moveSequenceItem(it.id, "down"));
+    row.querySelector(".seq-del").addEventListener("click", () => removeSequenceItem(it.id));
+    list.appendChild(row);
+  });
+}
+
+async function addCurrentClipToSequence() {
+  const clip = state.currentResultClip;
+  if (!clip) { alert("No clip selected."); return; }
+  const projectId = clip.project_id || state.projectId;
+  if (!projectId) { alert("No project for this clip."); return; }
+  try {
+    const md = clip.metadata || {};
+    const label = (md.prompt || "").slice(0, 48) || clip.clip_id;
+    const data = await apiJson("/api/sequence/" + projectId, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clip_id: clip.clip_id, label }),
+    });
+    renderSequence(data.sequence || []);
+    openPanel("sequence");
+  } catch (err) {
+    alert("Add to sequence failed: " + err.message);
+  }
+}
+
+async function moveSequenceItem(itemId, direction) {
+  if (!state.projectId) return;
+  try {
+    const data = await apiJson("/api/sequence/" + state.projectId + "/move", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ item_id: itemId, direction }),
+    });
+    renderSequence(data.sequence || []);
+  } catch (err) {
+    alert("Move failed: " + err.message);
+  }
+}
+
+async function removeSequenceItem(itemId) {
+  if (!state.projectId) return;
+  try {
+    const data = await apiJson(
+      "/api/sequence/" + state.projectId + "/" + itemId,
+      { method: "DELETE" }
+    );
+    renderSequence(data.sequence || []);
+  } catch (err) {
+    alert("Remove failed: " + err.message);
+  }
+}
+
+/* --------------------------- annealing / bridge --------------------------- */
+async function annealCurrentClip() {
+  const clip = state.currentResultClip;
+  if (!clip) { alert("No clip selected."); return; }
+  const btn = $("#anneal-btn");
+  if (btn) { btn.disabled = true; btn.textContent = "Bridging…"; }
+  try {
+    const data = await apiJson("/api/clips/" + clip.clip_id + "/anneal-to-next", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: state.model }),
+    });
+    state.projectId = data.project_id;
+    // Follow the bridge job's progress with the standard progress UI.
+    state.currentJob = data.job_id;
+    showProgress();
+    openWebSocket(data.job_id);
+  } catch (err) {
+    alert("Bridge failed: " + err.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "⤳ Bridge to Next"; }
+  }
+}
+
+/* --------------------------- export --------------------------- */
+async function downloadExport() {
+  const hint = $("#export-hint");
+  const projectId = state.projectId;
+  if (!projectId) { hint.textContent = "No project to export yet."; return; }
+  const exportType = $("#export-type").value;
+  hint.textContent = "Building export…";
+  try {
+    const res = await fetch("/api/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project_id: projectId, export_type: exportType }),
+    });
+    if (!res.ok) {
+      let msg = `Export failed (${res.status})`;
+      try { const j = await res.json(); msg = j.error || j.detail || msg; } catch (e) {}
+      hint.textContent = msg;
+      return;
+    }
+    const blob = await res.blob();
+    const disp = res.headers.get("Content-Disposition") || "";
+    const match = disp.match(/filename="?([^"]+)"?/);
+    const filename = match ? match[1] : "simple-comfort-export.zip";
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    hint.textContent = "Downloaded " + filename;
+  } catch (err) {
+    hint.textContent = "Export failed: " + err.message;
+  }
+}
+
+/* --------------------------- utils --------------------------- */
+function escapeHtml(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }

@@ -44,14 +44,22 @@ class LTX23Adapter(ModelAdapter):
         "quality": {"steps": 45, "guidance": 4.5},
     }
 
+    # Longest single section LTX renders comfortably (~seconds).
+    SECTION_SECONDS = 15.0
+
     def get_section_strategy(self, params: GenerationParams) -> List[SectionConfig]:
         fps = params.fps or 24
-        half = self.TARGET_SECONDS / 2.0
-        if params.segment_length:
-            half = params.segment_length
-        frames = _ltx_frame_count(half, fps)
+        target = params.effective_target_seconds(self.TARGET_SECONDS)
+        section_seconds = params.segment_length or (self.TARGET_SECONDS / 2.0)
+        # For a short target (e.g. b-roll) render fewer/one section(s).
+        if target <= self.SECTION_SECONDS:
+            num_sections = 1
+            section_seconds = target
+        else:
+            num_sections = max(1, round(target / section_seconds))
+        frames = _ltx_frame_count(section_seconds, fps)
         sections: List[SectionConfig] = []
-        for i in range(2):
+        for i in range(num_sections):
             first = i == 0
             sections.append(SectionConfig(
                 index=i,
@@ -74,11 +82,14 @@ class LTX23Adapter(ModelAdapter):
         return preset
 
     def map_parameters(self, params: GenerationParams, section: SectionConfig,
-                       last_frame_path: Optional[str]) -> Dict[str, Any]:
+                       last_frame_path: Optional[str],
+                       quality_params: Optional[Dict[str, Any]] = None
+                       ) -> Dict[str, Any]:
         width, height = self.resolve_resolution(params)
         quality = self._quality(params)
         resolved = params.resolved_prompt or self.resolve_prompt(params)
         seed = params.seed if params.seed is not None else 0
+        qp = quality_params if quality_params is not None else params.quality_params
 
         use_image = section.use_reference
         # Which conditioning image to use for this section.
@@ -102,4 +113,13 @@ class LTX23Adapter(ModelAdapter):
             "CHECKPOINT_NAME": "ltx-video-2b-v0.9.5.safetensors",
             "REFERENCE_IMAGE": image_path or "",
         }
+        # Professional-quality LTX controls (only applied when provided; unused
+        # tokens are simply ignored by the template substitution).
+        if qp:
+            if "camera_motion" in qp and qp["camera_motion"] is not None:
+                mapping["CAMERA_MOTION"] = float(qp["camera_motion"])
+            if "face_stability" in qp and qp["face_stability"] is not None:
+                mapping["FACE_STABILITY"] = float(qp["face_stability"])
+            if "upscale" in qp and qp["upscale"] is not None:
+                mapping["UPSCALE"] = float(qp["upscale"])
         return self._substitute(workflow, mapping)

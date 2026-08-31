@@ -55,14 +55,15 @@ class FramePackAdapter(ModelAdapter):
     def get_section_strategy(self, params: GenerationParams) -> List[SectionConfig]:
         """FramePack renders the whole clip in one call."""
         fps = params.fps or 30
-        frames = int(round(self.TARGET_SECONDS * fps))
+        target = params.effective_target_seconds(self.TARGET_SECONDS)
+        frames = int(round(target * fps))
         return [SectionConfig(
             index=0,
             frames=frames,
             fps=fps,
             is_first=True,
             use_reference=(params.mode == "i2v"),
-            approx_seconds=self.TARGET_SECONDS,
+            approx_seconds=target,
         )]
 
     def _quality(self, params: GenerationParams) -> Dict[str, float]:
@@ -74,14 +75,27 @@ class FramePackAdapter(ModelAdapter):
         return preset
 
     def map_parameters(self, params: GenerationParams, section: SectionConfig,
-                       last_frame_path: Optional[str]) -> Dict[str, Any]:
+                       last_frame_path: Optional[str],
+                       quality_params: Optional[Dict[str, Any]] = None
+                       ) -> Dict[str, Any]:
         width, height = self.resolve_resolution(params)
         quality = self._quality(params)
         resolved = params.resolved_prompt or self.resolve_prompt(params)
         seed = params.seed if params.seed is not None else 0
+        qp = quality_params if quality_params is not None else params.quality_params
 
         image_path = params.reference_image if params.mode == "i2v" else last_frame_path
         workflow = self.load_workflow(self.I2V_TEMPLATE)
+
+        # Anti-drift defaults to motion_strength but the professional panel may
+        # override it (and motion_strength) explicitly.
+        anti_drift = params.motion_strength
+        motion = params.motion_strength
+        if qp:
+            if qp.get("anti_drift") is not None:
+                anti_drift = float(qp["anti_drift"])
+            if qp.get("motion_strength") is not None:
+                motion = float(qp["motion_strength"])
 
         mapping = {
             "POSITIVE_PROMPT": resolved,
@@ -94,9 +108,12 @@ class FramePackAdapter(ModelAdapter):
             "FRAMES": section.frames,
             "FPS": section.fps,
             # Anti-drift / continuity controls (used where the node supports them).
-            "ANTI_DRIFT": float(params.motion_strength or 1.0),
-            "TOTAL_SECONDS": self.TARGET_SECONDS,
+            "ANTI_DRIFT": float(anti_drift if anti_drift is not None else 1.0),
+            "MOTION_STRENGTH": float(motion if motion is not None else 1.0),
+            "TOTAL_SECONDS": section.approx_seconds or self.TARGET_SECONDS,
             "CHECKPOINT_NAME": "FramePackI2V_HY_bf16.safetensors",
             "REFERENCE_IMAGE": image_path or "",
         }
+        if qp and qp.get("face_stability") is not None:
+            mapping["FACE_STABILITY"] = float(qp["face_stability"])
         return self._substitute(workflow, mapping)

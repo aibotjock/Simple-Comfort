@@ -63,6 +63,18 @@ class GenerationParams:
     negative_prompt: str = DEFAULT_NEGATIVE
     reference_image: Optional[str] = None  # absolute path on disk / uploaded name
     resolved_prompt: str = ""  # filled in by adapter (prompt + lip-sync suffix)
+    # Optional shorter target duration (e.g. b-roll wants ~8-10s instead of 30).
+    target_seconds: Optional[float] = None
+    # Professional-quality adapter parameters (model-specific, all optional):
+    # e.g. camera_motion, face_stability, upscale, anti_drift, denoise,
+    # interpolate_fps. Adapters read only the keys they support.
+    quality_params: Dict[str, Any] = field(default_factory=dict)
+
+    def effective_target_seconds(self, default: float) -> float:
+        """Return the requested target duration, falling back to ``default``."""
+        if self.target_seconds and self.target_seconds > 0:
+            return float(self.target_seconds)
+        return float(default)
 
 
 @dataclass
