@@ -69,6 +69,8 @@ class GenerationParams:
     # e.g. camera_motion, face_stability, upscale, anti_drift, denoise,
     # interpolate_fps. Adapters read only the keys they support.
     quality_params: Dict[str, Any] = field(default_factory=dict)
+    # Form values for imported custom workflows, keyed "<node_id>.<input>".
+    custom_values: Dict[str, Any] = field(default_factory=dict)
 
     def effective_target_seconds(self, default: float) -> float:
         """Return the requested target duration, falling back to ``default``."""

@@ -1,68 +1,94 @@
-"""FramePack adapter.
+"""FramePack adapter (kijai ComfyUI-FramePackWrapper).
 
-FramePack uses a progressive frame-section approach and produces a long clip in
-a single workflow call — the model handles internal sectioning itself. We
-therefore target the full 30 seconds in one render.
+FramePack renders a whole clip progressively inside a single workflow call:
+the sampler walks 9-latent (36-pixel-frame) windows anchored on the start
+image, so this engine always uses ONE section and lets the model handle
+internal sectioning itself (``total_second_length`` drives it).
 
-* I2V is always supported.
-* T2V is only exposed if the installed implementation actually provides a
-  text-only entry node (detected at runtime).
+Only image-to-video is supported — the sampler's ``start_latent`` is a
+required input, so a reference image is mandatory.
+
+The graph follows the official ``framepack_hv_example`` bar workflow with
+environment-justified substitutions:
+
+* core ``ImageScale`` replaces essentials ``ImageResize+`` (not installed)
+  for the bucket resize driven by ``FramePackFindNearestBucket``;
+* core ``CreateVideo`` -> ``SaveVideo`` replaces ``VHS_VideoCombine``;
+* the negative conditioning is ``ConditioningZeroOut`` of the positive — the
+  official distilled model runs at cfg 1.0, where the negative prompt is
+  zeroed by design.
+
+FramePack generates natively at 30fps, so the reported fps is fixed at 30
+regardless of the request. Actual pixel dimensions come from the model's
+resolution bucket — ``resolve_resolution`` values are advisory only.
 """
 from __future__ import annotations
 
+import hashlib
+import os
+import shutil
 from typing import Any, Dict, List, Optional
-
-from model_detector import ModelStatus
 
 from .base import (ModelAdapter, GenerationParams, SectionConfig,
                    DEFAULT_NEGATIVE)
+
+# Sampler window: latent_window_size * 4 pixel frames per internal section.
+LATENT_WINDOW_SIZE = 9
+PIXEL_FRAMES_PER_SECTION = LATENT_WINDOW_SIZE * 4  # 36
+
+# gpu_memory_preservation node bounds (anti-drift headroom control).
+GPU_MEMORY_MIN = 0.0
+GPU_MEMORY_MAX = 128.0
+# total_second_length node bound (FramePackSampler).
+MAX_TOTAL_SECONDS = 120.0
 
 
 class FramePackAdapter(ModelAdapter):
     MODEL_NAME = "FramePack"
     MODEL_KEY = "framepack"
-    SUPPORTED_MODES = {"i2v", "t2v"}  # t2v gated by detection
+    SUPPORTED_MODES = {"i2v"}  # start_latent is required: no text-to-video
     TARGET_SECONDS = 30
+    NATIVE_FPS = 30  # the sampler derives sections from seconds * 30
 
-    REQUIRED_NODES = ["FramePackSampler"]
-    # T2V is only available when this node exists.
-    T2V_NODE = "FramePackTextEncode"
-    CHECKPOINT_HINTS = ["framepack", "hunyuan"]
-    VAE_HINTS = ["hunyuan", "vae"]
-    TEXT_ENCODER_HINTS = ["llama", "clip_l", "llava"]
+    REQUIRED_NODES = ["LoadFramePackModel", "FramePackSampler",
+                      "FramePackFindNearestBucket"]
+    CHECKPOINT_HINTS = ["framepack"]
+    VAE_HINTS = ["hunyuan_video"]
+    TEXT_ENCODER_HINTS = ["llava"]
 
     I2V_TEMPLATE = "framepack_i2v.json"
-    T2V_TEMPLATE = "framepack_i2v.json"  # reused; blank init frame when T2V
 
+    # FramePack quality tuning (steps, guidance_scale); cfg stays 1.0 in-graph
+    # because the model is distilled (guidance_scale is the effective knob).
     QUALITY = {
-        "draft": {"steps": 15, "guidance": 6.0},
-        "balanced": {"steps": 25, "guidance": 10.0},
-        "quality": {"steps": 35, "guidance": 12.0},
+        "draft": {"steps": 20, "guidance": 10.0},
+        "balanced": {"steps": 30, "guidance": 10.0},  # official default
+        "quality": {"steps": 40, "guidance": 10.0},
     }
 
-    def detect_capabilities(self, object_info: Dict[str, Any],
-                            model_files: Dict[str, List[str]]) -> ModelStatus:
-        status = super().detect_capabilities(object_info, model_files)
-        # I2V always supported when available; T2V requires the text node.
-        if status.available:
-            status.i2v_capable = True
-            has_t2v_node = bool(object_info) and self.T2V_NODE in object_info
-            status.t2v_capable = has_t2v_node
-            if not has_t2v_node:
-                status.detail += " (T2V not supported by this FramePack build)"
-        return status
+    # Official FramePack workflows use an empty (zeroed) negative at cfg 1.0.
+    DEFAULT_NEGATIVE_PROMPT = ""
+    # Anti-drift default: GPU headroom preserved while sampling (GB).
+    DEFAULT_GPU_MEMORY_PRESERVATION = 6.0
 
     def get_section_strategy(self, params: GenerationParams) -> List[SectionConfig]:
-        """FramePack renders the whole clip in one call."""
-        fps = params.fps or 30
+        """FramePack renders the whole clip in a single call.
+
+        The sampler derives its internal sections from
+        ``total_second_length``: ``round(seconds * 30 / 36)`` windows of 36
+        frames plus the start frame, i.e. a 30s target yields 901 frames
+        (verified live: a 1-section render produced exactly 37 frames).
+        """
         target = params.effective_target_seconds(self.TARGET_SECONDS)
-        frames = int(round(target * fps))
+        # FramePackSampler.total_second_length node bound.
+        target = min(target, MAX_TOTAL_SECONDS)
+        frames = int(round(target * self.NATIVE_FPS)) + 1
         return [SectionConfig(
             index=0,
             frames=frames,
-            fps=fps,
+            fps=self.NATIVE_FPS,
             is_first=True,
-            use_reference=(params.mode == "i2v"),
+            use_reference=True,
             approx_seconds=target,
         )]
 
@@ -74,46 +100,74 @@ class FramePackAdapter(ModelAdapter):
             preset["guidance"] = params.guidance
         return preset
 
+    @staticmethod
+    def _stage_reference(image_path: str) -> str:
+        """Copy ``image_path`` into the ComfyUI input dir, return its name.
+
+        ComfyUI's LoadImage rejects absolute paths, so references are staged
+        into the input directory under a deterministic, path-hashed name.
+        Names already present in the input dir (uploads) pass through.
+        """
+        inp = os.environ.get("COMFY_INPUT_DIR", "/data/comfyui/input")
+        os.makedirs(inp, exist_ok=True)
+        if os.path.exists(image_path):
+            name = ("sc-"
+                    + hashlib.sha1(image_path.encode()).hexdigest()[:12]
+                    + os.path.splitext(image_path)[1])
+            dest = os.path.join(inp, name)
+            if not os.path.exists(dest):
+                shutil.copy2(image_path, dest)
+            return name
+        if os.path.exists(os.path.join(inp, image_path)):
+            return image_path
+        raise FileNotFoundError(f"Reference image not found: {image_path}")
+
     def map_parameters(self, params: GenerationParams, section: SectionConfig,
                        last_frame_path: Optional[str],
                        quality_params: Optional[Dict[str, Any]] = None
                        ) -> Dict[str, Any]:
-        width, height = self.resolve_resolution(params)
         quality = self._quality(params)
         resolved = params.resolved_prompt or self.resolve_prompt(params)
         seed = params.seed if params.seed is not None else 0
         qp = quality_params if quality_params is not None else params.quality_params
 
-        image_path = params.reference_image if params.mode == "i2v" else last_frame_path
+        image_path = params.reference_image if section.is_first else last_frame_path
+        if not image_path:
+            raise ValueError(
+                "FramePack requires a reference image (image-to-video only).")
+        reference_name = self._stage_reference(image_path)
+
+        # Anti-drift maps to the sampler's gpu_memory_preservation headroom.
+        anti_drift = self.DEFAULT_GPU_MEMORY_PRESERVATION
+        if qp and qp.get("anti_drift") is not None:
+            anti_drift = float(qp["anti_drift"])
+        anti_drift = min(max(anti_drift, GPU_MEMORY_MIN), GPU_MEMORY_MAX)
+
+        # House style: when the caller sends the base default negative, use
+        # this engine's official default instead. FramePack zeroes the
+        # negative at cfg 1.0, so the graph never consumes the text — the
+        # value is kept for parity with the other adapters.
+        negative = params.negative_prompt
+        if negative == DEFAULT_NEGATIVE:
+            negative = self.DEFAULT_NEGATIVE_PROMPT
+
+        # Advisory only: the bucket node decides the actual pixel size.
+        width, height = self.resolve_resolution(params)
+
         workflow = self.load_workflow(self.I2V_TEMPLATE)
-
-        # Anti-drift defaults to motion_strength but the professional panel may
-        # override it (and motion_strength) explicitly.
-        anti_drift = params.motion_strength
-        motion = params.motion_strength
-        if qp:
-            if qp.get("anti_drift") is not None:
-                anti_drift = float(qp["anti_drift"])
-            if qp.get("motion_strength") is not None:
-                motion = float(qp["motion_strength"])
-
         mapping = {
             "POSITIVE_PROMPT": resolved,
-            "NEGATIVE_PROMPT": params.negative_prompt or DEFAULT_NEGATIVE,
+            "NEGATIVE_PROMPT": negative,  # unused in-graph (zeroed at cfg 1.0)
             "STEPS": int(quality["steps"]),
             "GUIDANCE": float(quality["guidance"]),
-            "WIDTH": width,
-            "HEIGHT": height,
             "SEED": seed,
-            "FRAMES": section.frames,
             "FPS": section.fps,
-            # Anti-drift / continuity controls (used where the node supports them).
-            "ANTI_DRIFT": float(anti_drift if anti_drift is not None else 1.0),
-            "MOTION_STRENGTH": float(motion if motion is not None else 1.0),
-            "TOTAL_SECONDS": section.approx_seconds or self.TARGET_SECONDS,
-            "CHECKPOINT_NAME": "FramePackI2V_HY_bf16.safetensors",
-            "REFERENCE_IMAGE": image_path or "",
+            "TOTAL_SECONDS": float(min(section.approx_seconds
+                                       or self.TARGET_SECONDS,
+                                       MAX_TOTAL_SECONDS)),
+            "ANTI_DRIFT": anti_drift,
+            "REFERENCE_IMAGE": reference_name,
+            "WIDTH": width,   # reporting only — not in the template
+            "HEIGHT": height,
         }
-        if qp and qp.get("face_stability") is not None:
-            mapping["FACE_STABILITY"] = float(qp["face_stability"])
         return self._substitute(workflow, mapping)

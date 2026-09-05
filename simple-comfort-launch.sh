@@ -13,8 +13,21 @@ if [ -d "$APP_DIR/venv" ]; then
     source "$APP_DIR/venv/bin/activate"
 fi
 
-# Prevent duplicate instances — if already running, just open the browser.
+# Prevent duplicate instances — if a server is already answering on the port
+# (possibly started without a pidfile, e.g. by an older launcher), just open
+# the browser instead of dying on "address already in use".
+if curl -sf "$URL/" > /dev/null 2>&1; then
+    xdg-open "$URL" 2>/dev/null || true
+    exit 0
+fi
+
+# A tracked instance that isn't answering yet is still starting up — wait
+# for it briefly rather than spawning a competing one.
 if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
+    for _ in $(seq 1 15); do
+        sleep 1
+        curl -sf "$URL/" > /dev/null 2>&1 && break
+    done
     xdg-open "$URL" 2>/dev/null || true
     exit 0
 fi
@@ -25,15 +38,22 @@ SC_PID=$!
 echo "$SC_PID" > "$PIDFILE"
 
 # Wait for the server to be ready (max 15s).
+READY=0
 for _ in $(seq 1 15); do
     sleep 1
     if curl -sf "$URL/" > /dev/null 2>&1; then
+        READY=1
         break
     fi
 done
 
-# Open the browser.
-xdg-open "$URL" 2>/dev/null || true
+# Open the browser (or explain what went wrong if the server never came up).
+if [ "$READY" = 1 ]; then
+    xdg-open "$URL" 2>/dev/null || \
+        echo "Server is running at $URL — open it in your browser." >&2
+else
+    echo "Simple-Comfort failed to start on $URL — check the terminal output above." >&2
+fi
 
 # Keep the launcher alive alongside the server, then clean up.
 wait "$SC_PID"

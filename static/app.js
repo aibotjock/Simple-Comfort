@@ -3,11 +3,13 @@
 
 const state = {
   mode: "t2v",
-  model: "ltx23",
+  model: "ltx25",
   continuity: "new",
   aspect_ratio: "16:9",
   quality: "balanced",
   models: {},          // key -> status object
+  customWorkflows: {}, // slug -> record (with schema)
+  activeWorkflow: null,
   currentJob: null,
   ws: null,
   refFile: null,
@@ -17,7 +19,7 @@ const state = {
   currentResultClip: null,
 };
 
-const MODEL_LABELS = { ltx23: "LTX-2.3", wan22: "Wan 2.2", framepack: "FramePack" };
+const MODEL_LABELS = { ltx25: "LTX 2.5", wan22: "Wan 2.2", framepack: "FramePack" };
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -35,12 +37,14 @@ document.addEventListener("DOMContentLoaded", () => {
   wirePanels();
   wireLibraryForms();
   wireExportCards();
+  wireWorkflowPanel();
   refreshStatus();
   refreshModels();
   refreshGallery();
   loadAvatars();
   loadVoices();
   loadBrollCategories();
+  loadCustomWorkflows();
   setInterval(refreshStatus, 5000);
 
   // Ctrl+Enter to generate.
@@ -534,6 +538,12 @@ function resetGenerateBtn() {
   btn.disabled = false;
   btn.classList.remove("generating");
   btn.textContent = "GENERATE 30s CLIP";
+  const wfBtn = $("#wf-generate");
+  if (wfBtn) {
+    wfBtn.disabled = false;
+    wfBtn.classList.remove("generating");
+    wfBtn.textContent = "GENERATE WITH WORKFLOW";
+  }
 }
 
 /* --------------------------- progress / websocket --------------------------- */
@@ -1307,6 +1317,264 @@ async function downloadExport() {
   } catch (err) {
     hint.textContent = "Export failed: " + err.message;
   }
+}
+
+/* --------------------------- custom workflows --------------------------- */
+const WF_GROUP_ORDER = ["prompts", "generation", "images", "models", "advanced"];
+const WF_GROUP_LABELS = {
+  prompts: "Prompts",
+  generation: "Generation",
+  images: "Images",
+  models: "Models & Loaders",
+  advanced: "Advanced",
+};
+
+function wireWorkflowPanel() {
+  const drop = $("#wf-drop");
+  const input = $("#wf-input");
+  if (!drop || !input) return;
+
+  drop.addEventListener("click", (e) => {
+    if (e.target !== input) input.click();
+  });
+  ["dragover", "dragenter"].forEach((ev) =>
+    drop.addEventListener(ev, (e) => {
+      e.preventDefault();
+      drop.classList.add("drag");
+    })
+  );
+  ["dragleave", "drop"].forEach((ev) =>
+    drop.addEventListener(ev, (e) => {
+      e.preventDefault();
+      drop.classList.remove("drag");
+    })
+  );
+  drop.addEventListener("drop", (e) => uploadWorkflows(e.dataTransfer.files));
+  input.addEventListener("change", () => { uploadWorkflows(input.files); input.value = ""; });
+
+  $("#wf-delete").addEventListener("click", deleteWorkflow);
+  $("#wf-generate").addEventListener("click", submitCustomWorkflow);
+}
+
+async function loadCustomWorkflows() {
+  try {
+    const res = await fetch("/api/custom-workflows");
+    const data = await res.json();
+    (data.workflows || []).forEach((wf) => { state.customWorkflows[wf.slug] = wf; });
+    renderWorkflowList();
+  } catch (err) {
+    console.warn("custom workflows load failed", err);
+  }
+}
+
+async function uploadWorkflows(files) {
+  const hint = $("#wf-hint");
+  let lastSlug = null;
+  for (const file of Array.from(files || [])) {
+    if (!/\.json$/i.test(file.name)) {
+      hint.textContent = "Only .json workflow files are supported.";
+      continue;
+    }
+    hint.textContent = "Importing " + file.name + "…";
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      const res = await fetch("/api/custom-workflows", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!data.success) {
+        hint.textContent = data.error || "Import failed.";
+        continue;
+      }
+      state.customWorkflows[data.data.slug] = data.data;
+      hint.textContent = "Imported " + data.data.name;
+      lastSlug = data.data.slug;
+    } catch (err) {
+      hint.textContent = "Import failed: " + err.message;
+    }
+  }
+  renderWorkflowList();
+  if (lastSlug) selectWorkflow(lastSlug);
+}
+
+function renderWorkflowList() {
+  const list = $("#wf-list");
+  if (!list) return;
+  const records = Object.values(state.customWorkflows);
+  if (!records.length) {
+    list.innerHTML = '<div class="wf-empty">No workflows imported yet.</div>';
+    return;
+  }
+  list.innerHTML = records
+    .map((wf) => {
+      const active = wf.slug === state.activeWorkflow ? " active" : "";
+      const outs = (wf.schema.output_nodes || []).join(", ") || "no save node";
+      return `<button type="button" class="wf-card${active}" data-slug="${escapeHtml(wf.slug)}">
+        <span class="wf-card-name">${escapeHtml(wf.name)}</span>
+        <span class="wf-card-meta">${wf.schema.node_count || "?"} nodes · ${escapeHtml(wf.format)} · ${escapeHtml(outs)}</span>
+      </button>`;
+    })
+    .join("");
+  $$("#wf-list .wf-card").forEach((card) =>
+    card.addEventListener("click", () => selectWorkflow(card.dataset.slug))
+  );
+}
+
+function selectWorkflow(slug) {
+  const rec = state.customWorkflows[slug];
+  if (!rec) return;
+  state.activeWorkflow = slug;
+  renderWorkflowList();
+  $("#wf-detail").classList.remove("hidden");
+  $("#wf-name").textContent = rec.name;
+  $("#wf-meta").textContent =
+    `${rec.schema.node_count} nodes · ${rec.format} · ` +
+    ((rec.schema.output_nodes || []).join(", ") || "no save node");
+  renderWorkflowForm(rec);
+  $("#wf-detail").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function renderWorkflowForm(rec) {
+  const form = $("#wf-form");
+  const fields = (rec.schema && rec.schema.fields) || [];
+  if (!fields.length) {
+    form.innerHTML = '<div class="wf-empty">No editable inputs found — the workflow will run as-is.</div>';
+    return;
+  }
+  const byGroup = {};
+  fields.forEach((f) => {
+    (byGroup[f.group] = byGroup[f.group] || []).push(f);
+  });
+  let html = "";
+  WF_GROUP_ORDER.forEach((group) => {
+    const groupFields = byGroup[group];
+    if (!groupFields) return;
+    const collapsed = group === "advanced" || group === "models";
+    html += `<details class="wf-group"${collapsed ? "" : " open"}>` +
+      `<summary>${WF_GROUP_LABELS[group] || group} <span class="summary-caret">▾</span></summary>`;
+    groupFields.forEach((f) => { html += workflowFieldHtml(f); });
+    html += "</details>";
+  });
+  // Any custom group not in WF_GROUP_ORDER.
+  Object.keys(byGroup).forEach((group) => {
+    if (WF_GROUP_ORDER.includes(group)) return;
+    html += `<details class="wf-group"><summary>${escapeHtml(group)} <span class="summary-caret">▾</span></summary>`;
+    byGroup[group].forEach((f) => { html += workflowFieldHtml(f); });
+    html += "</details>";
+  });
+  form.innerHTML = html;
+
+  // Seed dice buttons.
+  $$("#wf-form .wf-dice").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const input = document.getElementById("wf-f-" + btn.dataset.field);
+      if (input) input.value = Math.floor(Math.random() * 4294967295);
+    })
+  );
+}
+
+function workflowFieldHtml(f) {
+  const id = "wf-f-" + f.id;
+  const label = `<label class="wf-label" for="${id}">${escapeHtml(f.label)}</label>`;
+  let control = "";
+  if (f.kind === "text") {
+    control = f.multiline
+      ? `<textarea id="${id}" class="textarea wf-input" rows="3" data-field="${escapeHtml(f.id)}">${escapeHtml(f.default)}</textarea>`
+      : `<input type="text" id="${id}" class="input wf-input" data-field="${escapeHtml(f.id)}" value="${escapeHtml(f.default)}" />`;
+  } else if (f.kind === "int" || f.kind === "float" || f.kind === "seed") {
+    control = `<div class="wf-seed-row">` +
+      `<input type="number" id="${id}" class="input wf-input" data-field="${escapeHtml(f.id)}" value="${escapeHtml(f.default)}"` +
+      (f.min != null ? ` min="${f.min}"` : "") +
+      (f.max != null ? ` max="${f.max}"` : "") +
+      (f.step != null ? ` step="${f.step}"` : f.kind === "float" ? ' step="0.1"' : "") +
+      ` />` +
+      (f.kind === "seed" ? `<button type="button" class="btn-secondary wf-dice" data-field="${escapeHtml(f.id)}" title="Random seed">🎲</button>` : "") +
+      `</div>`;
+  } else if (f.kind === "bool") {
+    control = `<label class="switch"><input type="checkbox" id="${id}" data-field="${escapeHtml(f.id)}" ${f.default ? "checked" : ""} /><span class="slider"></span></label>`;
+  } else if (f.kind === "combo") {
+    const opts = f.options || [];
+    const known = opts.some((o) => String(o) === String(f.default));
+    control = `<select id="${id}" class="input wf-input" data-field="${escapeHtml(f.id)}">` +
+      (known ? "" : `<option value="${escapeHtml(f.default)}" selected>${escapeHtml(f.default)}</option>`) +
+      opts.map((o) =>
+        `<option value="${escapeHtml(o)}"${String(o) === String(f.default) ? " selected" : ""}>${escapeHtml(o)}</option>`
+      ).join("") +
+      `</select>`;
+  } else if (f.kind === "image") {
+    control = `<input type="file" id="${id}" class="input wf-input wf-file" accept="image/*" data-field="${escapeHtml(f.id)}" />` +
+      `<div class="wf-file-name" data-name="${escapeHtml(f.id)}">${escapeHtml(f.default || "")}</div>`;
+  }
+  return `<div class="wf-field">${label}${control}</div>`;
+}
+
+async function submitCustomWorkflow() {
+  const slug = state.activeWorkflow;
+  const rec = slug && state.customWorkflows[slug];
+  const btn = $("#wf-generate");
+  if (!rec) return;
+
+  const values = {};
+  const files = {};
+  $$("#wf-form [data-field]").forEach((el) => {
+    const key = el.dataset.field;
+    if (el.type === "checkbox") values[key] = el.checked;
+    else if (el.type === "file") {
+      if (el.files && el.files[0]) files[key] = el.files[0];
+    } else values[key] = el.value;
+  });
+
+  // Read chosen images as data URLs for server-side staging.
+  for (const [key, file] of Object.entries(files)) {
+    values[key] = await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => resolve("");
+      reader.readAsDataURL(file);
+    });
+  }
+
+  btn.disabled = true;
+  btn.classList.add("generating");
+  btn.textContent = "STARTING…";
+
+  try {
+    const res = await fetch(`/api/custom-workflows/${encodeURIComponent(slug)}/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        values,
+        worker_index: null,
+        project_id: state.projectId || null,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      $("#wf-hint").textContent = data.error || "Generation failed to start.";
+      resetGenerateBtn();
+      return;
+    }
+    state.currentJob = data.job_id;
+    state.projectId = data.project_id;
+    closePanels();
+    showProgress();
+    openWebSocket(data.job_id);
+  } catch (err) {
+    $("#wf-hint").textContent = "Network error: " + err.message;
+    resetGenerateBtn();
+  }
+}
+
+async function deleteWorkflow() {
+  const slug = state.activeWorkflow;
+  if (!slug || !state.customWorkflows[slug]) return;
+  if (!confirm(`Remove workflow "${state.customWorkflows[slug].name}"?`)) return;
+  try {
+    await fetch(`/api/custom-workflows/${encodeURIComponent(slug)}`, { method: "DELETE" });
+  } catch (err) { /* ignore */ }
+  delete state.customWorkflows[slug];
+  state.activeWorkflow = null;
+  $("#wf-detail").classList.add("hidden");
+  renderWorkflowList();
 }
 
 /* --------------------------- utils --------------------------- */

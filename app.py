@@ -27,6 +27,8 @@ from fastapi.staticfiles import StaticFiles
 
 from adapters import GenerationParams, build_adapters
 from avatar_manager import AvatarManager
+from custom_workflows import (CustomWorkflowError, CustomWorkflowRegistry,
+                              stage_image_values)
 from broll_manager import (BRollCategory, BRollRequest, list_categories,
                            prepare_generation_params)
 from comfy_client import WorkerPool
@@ -56,6 +58,7 @@ class AppState:
     voices: VoiceManager
     sequences: SequenceManager
     exports: ExportManager
+    custom_workflows: CustomWorkflowRegistry
 
 
 state = AppState()
@@ -93,6 +96,10 @@ async def lifespan(app: FastAPI):
 
     state.pool = WorkerPool(settings.endpoints, timeout=settings.COMFY_TIMEOUT)
     state.adapters = build_adapters()
+    # Imported custom workflows register themselves as adapters so jobs run
+    # through the normal GenerationManager pipeline.
+    state.custom_workflows = CustomWorkflowRegistry(state.adapters)
+    state.custom_workflows.load_all()
     state.detector = ModelDetector(state.pool, state.adapters,
                                    cache_ttl=settings.MODEL_CACHE_TTL)
     state.projects = ProjectManager(settings.OUTPUT_DIR)
@@ -210,6 +217,85 @@ async def api_last_clip():
     if not clip:
         return {"clip": None}
     return {"clip": clip.to_public_dict(settings.OUTPUT_DIR)}
+
+
+# ---------------------------------------------------------------------- #
+# Custom workflow import (drag & drop ComfyUI JSON)
+# ---------------------------------------------------------------------- #
+async def _live_object_info():
+    """Fetch /object_info from the first alive worker (or None)."""
+    try:
+        await state.pool.refresh_health()
+        for worker in state.pool.workers:
+            if worker.alive:
+                return await worker.client.get_object_info()
+    except Exception as exc:  # noqa: BLE001
+        log.debug("object_info fetch failed: %s", exc)
+    return None
+
+
+@app.get("/api/custom-workflows")
+async def api_custom_workflows_list():
+    return {"workflows": state.custom_workflows.list()}
+
+
+@app.post("/api/custom-workflows")
+async def api_custom_workflows_add(file: UploadFile = File(...)):
+    data = await file.read()
+    if len(data) > 8 * 1024 * 1024:
+        return err("Workflow file too large (max 8MB).")
+    try:
+        object_info = await _live_object_info()
+        record = await state.custom_workflows.add(
+            file.filename or "workflow.json", data, object_info
+        )
+    except CustomWorkflowError as exc:
+        return err(str(exc))
+    return ok(record)
+
+
+@app.delete("/api/custom-workflows/{slug}")
+async def api_custom_workflows_delete(slug: str):
+    if not state.custom_workflows.remove(slug):
+        return err(f"Unknown workflow '{slug}'", status_code=404)
+    return ok()
+
+
+@app.post("/api/custom-workflows/{slug}/generate")
+async def api_custom_generate(slug: str, body: dict = Body(...)):
+    record = state.custom_workflows.get(slug)
+    if not record:
+        return err(f"Unknown workflow '{slug}'", status_code=404)
+
+    values = body.get("values") or {}
+    try:
+        values = stage_image_values(values)
+    except CustomWorkflowError as exc:
+        return err(str(exc))
+
+    schema = record.get("schema") or {}
+    mode = "i2v" if schema.get("has_image_input") else "t2v"
+
+    project_id = body.get("project_id") or state.projects.create_project()
+    params = GenerationParams(
+        prompt="",  # the adapter pulls it from the graph's prompt fields
+        mode=mode,
+        custom_values=values,
+    )
+    extra_metadata = {
+        "model_key": f"custom:{slug}",
+        "checkpoint_info": {"adapter": "Custom workflow",
+                            "workflow": record["name"]},
+        "generation_settings": {
+            "workflow": record["name"],
+            "worker_index": body.get("worker_index"),
+        },
+    }
+    job = state.manager.submit(
+        params, project_id, None, body.get("worker_index"), extra_metadata,
+    )
+    return {"job_id": job.job_id, "project_id": project_id,
+            "status": job.status}
 
 
 def _ffmpeg_ok() -> bool:

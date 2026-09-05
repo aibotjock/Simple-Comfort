@@ -21,3 +21,10 @@ venv/
 *.pid
 .sc.pid
 .abacus.donotdelete
+
+# Vendored ComfyUI clone (14GB, recon artifact) and source snapshots
+ComfyUI/
+simple_comfort_source.zip
+
+# User-imported custom workflows (runtime data)
+custom_workflows/

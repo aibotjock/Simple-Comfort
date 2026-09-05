@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Simple Comfort — Gauntlet Loop</title>
+<style>
+  :root {
+    --bg: #0e0f13; --panel: #16181f; --panel-2: #1c1f28; --line: #2a2e3a;
+    --text: #e8eaf0; --dim: #9aa1b2; --accent: #7c6cf0; --ok: #3ecf8e;
+    --warn: #f0b429; --bad: #ef5b5b; --info: #58a6ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.55 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 28px 20px 60px; }
+  h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: .2px; }
+  h1 .loop { color: var(--accent); }
+  .sub { color: var(--dim); font-size: 13px; margin-bottom: 22px; }
+  .sub b { color: var(--text); font-weight: 600; }
+  .phases { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 26px; }
+  .phase {
+    padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line);
+    background: var(--panel); font-size: 12.5px; color: var(--dim);
+    display: flex; align-items: center; gap: 7px;
+  }
+  .phase .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
+  .phase.done { color: var(--text); border-color: #2f4d3f; }
+  .phase.done .dot { background: var(--ok); }
+  .phase.active { color: var(--text); border-color: var(--accent); box-shadow: 0 0 0 1px rgba(124,108,240,.25); }
+  .phase.active .dot { background: var(--accent); animation: pulse 1.6s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 14px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px 16px 14px;
+  }
+  .card h2 { font-size: 15px; margin: 0 0 2px; display: flex; align-items: center; gap: 9px; }
+  .badge {
+    font-size: 10.5px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 5px;
+  }
+  .b-pending { background: #2a2e3a; color: var(--dim); }
+  .b-build   { background: rgba(88,166,255,.15); color: var(--info); }
+  .b-critic  { background: rgba(124,108,240,.18); color: var(--accent); }
+  .b-win     { background: rgba(62,207,142,.15); color: var(--ok); }
+  .b-render  { background: rgba(240,180,41,.15); color: var(--warn); }
+  .b-fail    { background: rgba(239,91,91,.15); color: var(--bad); }
+  .meta { color: var(--dim); font-size: 12px; margin: 4px 0 10px; }
+  .note { font-size: 12.5px; color: var(--text); background: var(--panel-2);
+          border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
+          white-space: pre-wrap; word-break: break-word; }
+  .note:empty { display: none; }
+  .critic { margin-top: 10px; font-size: 12px; color: var(--dim); }
+  .critic b { color: var(--text); }
+  .critic .verdict-win { color: var(--ok); font-weight: 700; }
+  .critic .verdict-lose { color: var(--bad); font-weight: 700; }
+  footer { margin-top: 26px; color: var(--dim); font-size: 12px; display: flex;
+           justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+  .clip-link { color: var(--info); text-decoration: none; }
+  .clip-link:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Simple Comfort <span class="loop">— Gauntlet Loop</span></h1>
+  <div class="sub" id="sub">Loading…</div>
+  <div class="phases" id="phases"></div>
+  <div class="cards" id="cards"></div>
+  <footer>
+    <span>Bar: official LTX-2.5 / Wan 2.2 / FramePack workflows · critic judges blind</span>
+    <span id="stamp"></span>
+  </footer>
+</div>
+<script>
+const PHASES = ["recon","downloads","build","critic","renders"];
+const PHASE_LABEL = {recon:"Recon & bar",downloads:"Model downloads",build:"Build engines",critic:"Critic gauntlet",renders:"Live renders"};
+const STATE_LABEL = {pending:"pending",build:"building",critic:"in critic",win:"critic picks ours",render:"rendering",done:"rendered ✓",fail:"failed"};
+
+async function tick() {
+  try {
+    const r = await fetch("/static/gauntlet_status.json", {cache: "no-store"});
+    const s = await r.json();
+    document.getElementById("sub").innerHTML =
+      `Round <b>${s.round ?? "—"}</b> · bar: <b>${s.bar ?? "official workflows + live render"}</b>` +
+      (s.headline ? ` · ${s.headline}` : "");
+    const ph = document.getElementById("phases");
+    ph.innerHTML = PHASES.map(p => {
+      const st = (s.phases || {})[p] || "pending";
+      return `<div class="phase ${st}"><span class="dot"></span>${PHASE_LABEL[p]}</div>`;
+    }).join("");
+    const cards = document.getElementById("cards");
+    cards.innerHTML = Object.entries(s.engines || {}).map(([k, e]) => `
+      <div class="card">
+        <h2>${e.name} <span class="badge b-${e.state}">${STATE_LABEL[e.state] || e.state}</span></h2>
+        <div class="meta">${e.meta || ""}</div>
+        <div class="note">${e.note || ""}</div>
+        <div class="critic">critic round: <b>${e.critic_round ?? 0}</b>` +
+          (e.verdict ? ` · verdict: <span class="verdict-${e.verdict === "ours" ? "win" : "lose"}">${e.verdict === "ours" ? "OURS WINS" : "official wins"}</span>` : "") +
+          (e.gap ? `<br>biggest gap: ${e.gap}` : "") +
+          (e.clip ? `<br>clip: <a class="clip-link" href="${e.clip}" target="_blank">${e.clip.split("/").pop()}</a>` : "") + `</div>
+      </div>`).join("");
+    document.getElementById("stamp").textContent = "updated " + (s.updated || "");
+  } catch (e) {
+    document.getElementById("sub").textContent = "status file not reachable — waiting for first write";
+  }
+}
+tick();
+setInterval(tick, 8000);
+</script>
+</body>
+</html>

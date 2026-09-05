@@ -145,6 +145,32 @@ async def concat_videos(paths: List[Path], output_path: Path,
     return output_path
 
 
+async def still_to_video(image_path: Path, output_path: Path,
+                         fps: int = 24, duration: float = 2.0) -> Path:
+    """Promote a still image to a short playable mp4 (1/fps * duration frames).
+
+    Used when a custom workflow's only output is an image — the clip library
+    and browser player expect a video file.
+    """
+    image_path = Path(image_path)
+    output_path = Path(output_path)
+    if not image_path.exists():
+        raise FFmpegError(f"Still image missing: {image_path}")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    frames = max(1, int(duration * fps))
+    cmd = [
+        _binary("ffmpeg"), "-y",
+        "-loop", "1", "-i", str(image_path),
+        "-frames:v", str(frames), "-r", str(fps),
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-an",
+        str(output_path),
+    ]
+    await _run(cmd)
+    if not output_path.exists():
+        raise FFmpegError("Still-to-video conversion produced no output")
+    return output_path
+
+
 async def extract_frame(video_path: Path, frame_number: int,
                         output_path: Path) -> Path:
     """Extract a specific 0-based frame index to a PNG."""

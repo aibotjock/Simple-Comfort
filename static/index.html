@@ -19,8 +19,8 @@
 
     <!-- Model status chips (also the primary model selector) -->
     <div class="model-chips pill-group" id="model-group" data-name="model">
-      <button type="button" class="model-chip pill active" data-value="ltx23">
-        <span class="dot dot-yellow model-dot"></span>LTX-2.3
+      <button type="button" class="model-chip pill active" data-value="ltx25">
+        <span class="dot dot-yellow model-dot"></span>LTX 2.5
       </button>
       <button type="button" class="model-chip pill" data-value="wan22">
         <span class="dot dot-yellow model-dot"></span>Wan 2.2
@@ -49,7 +49,7 @@
             <button type="button" class="pill active" data-value="t2v">Text to Video</button>
             <button type="button" class="pill" data-value="i2v">Image to Video</button>
           </div>
-          <div class="model-inline-badge">Model: <b id="model-badge">LTX-2.3</b></div>
+          <div class="model-inline-badge">Model: <b id="model-badge">LTX 2.5</b></div>
         </div>
       </div>
 
@@ -351,6 +351,35 @@
     </div>
   </aside>
 
+  <!-- Custom Workflows -->
+  <aside class="side-panel" id="panel-workflows" aria-hidden="true">
+    <div class="panel-head">
+      <h3>Custom Workflows</h3>
+      <button class="panel-close" data-panel="workflows">✕</button>
+    </div>
+    <div class="panel-body">
+      <div class="wf-drop" id="wf-drop">
+        <input type="file" id="wf-input" accept=".json,application/json" hidden multiple />
+        <span class="dz-icon">🧩</span>
+        <span class="wf-drop-title">Drop a ComfyUI workflow JSON</span>
+        <span class="dz-sub">API format or editor export · click to browse</span>
+        <span class="mini-hint" id="wf-hint"></span>
+      </div>
+      <div class="wf-list" id="wf-list"></div>
+      <div class="wf-detail hidden" id="wf-detail">
+        <div class="wf-detail-head">
+          <div class="wf-detail-titles">
+            <div class="wf-name" id="wf-name"></div>
+            <div class="wf-meta" id="wf-meta"></div>
+          </div>
+          <button type="button" class="btn-secondary btn-danger wf-remove" id="wf-delete">✕ Remove</button>
+        </div>
+        <div class="wf-form" id="wf-form"></div>
+        <button type="button" class="btn-primary" id="wf-generate">GENERATE WITH WORKFLOW</button>
+      </div>
+    </div>
+  </aside>
+
   <!-- Sequence -->
   <aside class="side-panel" id="panel-sequence" aria-hidden="true">
     <div class="panel-head">
@@ -402,6 +431,7 @@
     <button class="tab-btn" data-panel="avatars"><span class="tab-ico">👤</span>Avatars</button>
     <button class="tab-btn" data-panel="voices"><span class="tab-ico">🎙</span>Voices</button>
     <button class="tab-btn" data-panel="broll"><span class="tab-ico">🎬</span>B-Roll</button>
+    <button class="tab-btn" data-panel="workflows"><span class="tab-ico">🧩</span>Workflows</button>
     <button class="tab-btn" data-panel="sequence"><span class="tab-ico">📑</span>Sequence</button>
     <button class="tab-btn" data-panel="export"><span class="tab-ico">⬇</span>Export</button>
   </nav>

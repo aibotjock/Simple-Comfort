@@ -1,0 +1,30 @@
+{
+  "round": 1,
+  "bar": "official workflows in gauntlet/bar/ + live render on :8188",
+  "headline": "Gauntlet R1 CLOSED — all 7 engine templates pass live ComfyUI validation; real renders confirmed on both paths (Wan 2.2 30s multi-section via /api/generate, custom lightx2v workflow via drag-and-drop import); LTX 2.5 registered as the LTX-2.3 replacement",
+  "updated": "2026-09-05 00:55",
+  "phases": { "recon": "done", "downloads": "done", "build": "done", "critic": "done", "renders": "done" },
+  "engines": {
+    "ltx25": {
+      "name": "LTX 2.5",
+      "state": "validated",
+      "meta": "22B distilled int8 · Gemma enhancer in-graph · two-stage upscaler",
+      "note": "Adapter registered (LTX23 removed from registry + UI defaults), 4 templates pass server-side /prompt validation on ComfyUI 0.34.0. Model detection reports available.",
+      "critic_round": 1
+    },
+    "wan22": {
+      "name": "Wan 2.2",
+      "state": "rendered",
+      "meta": "14B MoE fp8 high+low · lightx2v 4-step · core-native",
+      "note": "t2v + i2v templates validated; full 30s 2-section render completed through /api/generate (640x384, chained sections, concat OK).",
+      "critic_round": 1
+    },
+    "framepack": {
+      "name": "FramePack",
+      "state": "validated",
+      "meta": "Hunyuan fp8 · block swap · i2v long-form",
+      "note": "i2v template passes server-side validation; FramePackWrapper inputs match live object_info.",
+      "critic_round": 1
+    }
+  }
+}

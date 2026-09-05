@@ -1,64 +1,155 @@
 {
-  "_comment": "Wan 2.2 TI2V-5B Text-to-Video (ComfyUI API format, WanVideoWrapper nodes). Adjust node 1 'model' to your Wan 2.2 diffusion model, node 3 'model_name' to your umt5 text encoder, node 2 'model_name' to your Wan VAE.",
+  "_comment": "Wan 2.2 T2V 14B dual-expert, ComfyUI core nodes only (matches official lightx2v NativeComfy template). High-noise expert (37->67->54) runs sampler 57, low-noise expert (56->68->55) runs sampler 58. LoRA strength 0 turns this into the official standard 20-step path.",
   "_documentation": {
-    "model_node": "1 -> WanVideoModelLoader.model (wan2.2_ti2v_5B checkpoint)",
-    "vae_node": "2 -> WanVideoVAELoader.model_name",
-    "text_encoder_node": "3 -> LoadWanVideoT5TextEncoder.model_name (umt5)",
-    "sampler_node": "6 -> WanVideoSampler (steps/cfg/seed/num_frames)",
-    "save_node": "9 -> VHS_VideoCombine (frame_rate)"
+    "high_noise_unet": "37 -> UNETLoader.unet_name (wan2.2_t2v_high_noise_14B_fp8_scaled)",
+    "high_noise_lora": "67 -> LoraLoaderModelOnly.lora_name (lightx2v 4-step high noise, {{LORA_STRENGTH}})",
+    "low_noise_unet": "56 -> UNETLoader.unet_name (wan2.2_t2v_low_noise_14B_fp8_scaled)",
+    "low_noise_lora": "68 -> LoraLoaderModelOnly.lora_name (lightx2v 4-step low noise, {{LORA_STRENGTH}})",
+    "shift": "54/55 -> ModelSamplingSD3.shift ({{SHIFT}}: 5.0 lightx2v, 8.0 standard)",
+    "text_encoder": "38 -> CLIPLoader.clip_name (umt5_xxl_fp8_e4m3fn_scaled, type wan)",
+    "vae": "39 -> VAELoader.vae_name (wan_2.1_vae)",
+    "latent": "59 -> EmptyHunyuanLatentVideo ({{WIDTH}} x {{HEIGHT}} x {{FRAMES}}, 4n+1 frames)",
+    "samplers": "57 (steps 0..{{STEP_SPLIT}}, leftover noise on) -> 58 ({{STEP_SPLIT}}..10000)",
+    "save_node": "61 -> SaveVideo (CreateVideo fps {{FPS}})"
   },
-  "1": {
-    "class_type": "WanVideoModelLoader",
-    "inputs": {"model": "{{CHECKPOINT_NAME}}", "base_precision": "fp16", "quantization": "disabled"}
-  },
-  "2": {
-    "class_type": "WanVideoVAELoader",
-    "inputs": {"model_name": "wan2.2_vae.safetensors", "precision": "fp16"}
-  },
-  "3": {
-    "class_type": "LoadWanVideoT5TextEncoder",
-    "inputs": {"model_name": "umt5_xxl_fp16.safetensors", "precision": "fp16"}
-  },
-  "4": {
-    "class_type": "WanVideoTextEncode",
+  "37": {
+    "class_type": "UNETLoader",
     "inputs": {
-      "t5": ["3", 0],
-      "positive_prompt": "{{POSITIVE_PROMPT}}",
-      "negative_prompt": "{{NEGATIVE_PROMPT}}"
+      "unet_name": "wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors",
+      "weight_dtype": "default"
     }
   },
-  "5": {
-    "class_type": "WanVideoEmptyEmbeds",
-    "inputs": {"width": "{{WIDTH}}", "height": "{{HEIGHT}}", "num_frames": "{{FRAMES}}"}
+  "67": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": ["37", 0],
+      "lora_name": "wan2.2_t2v_lightx2v_4steps_lora_v1.1_high_noise.safetensors",
+      "strength_model": "{{LORA_STRENGTH}}"
+    }
+  },
+  "54": {
+    "class_type": "ModelSamplingSD3",
+    "inputs": {
+      "model": ["67", 0],
+      "shift": "{{SHIFT}}"
+    }
+  },
+  "56": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "68": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": ["56", 0],
+      "lora_name": "wan2.2_t2v_lightx2v_4steps_lora_v1.1_low_noise.safetensors",
+      "strength_model": "{{LORA_STRENGTH}}"
+    }
+  },
+  "55": {
+    "class_type": "ModelSamplingSD3",
+    "inputs": {
+      "model": ["68", 0],
+      "shift": "{{SHIFT}}"
+    }
+  },
+  "38": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "type": "wan",
+      "device": "default"
+    }
+  },
+  "39": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "wan_2.1_vae.safetensors"
+    }
   },
   "6": {
-    "class_type": "WanVideoSampler",
+    "class_type": "CLIPTextEncode",
     "inputs": {
-      "model": ["1", 0],
-      "text_embeds": ["4", 0],
-      "image_embeds": ["5", 0],
+      "text": "{{POSITIVE_PROMPT}}",
+      "clip": ["38", 0]
+    }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "{{NEGATIVE_PROMPT}}",
+      "clip": ["38", 0]
+    }
+  },
+  "59": {
+    "class_type": "EmptyHunyuanLatentVideo",
+    "inputs": {
+      "width": "{{WIDTH}}",
+      "height": "{{HEIGHT}}",
+      "length": "{{FRAMES}}",
+      "batch_size": 1
+    }
+  },
+  "57": {
+    "class_type": "KSamplerAdvanced",
+    "inputs": {
+      "model": ["54", 0],
+      "add_noise": "enable",
+      "noise_seed": "{{SEED}}",
       "steps": "{{STEPS}}",
       "cfg": "{{GUIDANCE}}",
-      "seed": "{{SEED}}",
-      "scheduler": "unipc",
-      "shift": 5.0,
-      "denoise_strength": "{{MOTION_STRENGTH}}"
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "positive": ["6", 0],
+      "negative": ["7", 0],
+      "latent_image": ["59", 0],
+      "start_at_step": 0,
+      "end_at_step": "{{STEP_SPLIT}}",
+      "return_with_leftover_noise": "enable"
+    }
+  },
+  "58": {
+    "class_type": "KSamplerAdvanced",
+    "inputs": {
+      "model": ["55", 0],
+      "add_noise": "disable",
+      "noise_seed": "{{SEED}}",
+      "steps": "{{STEPS}}",
+      "cfg": "{{GUIDANCE}}",
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "positive": ["6", 0],
+      "negative": ["7", 0],
+      "latent_image": ["57", 0],
+      "start_at_step": "{{STEP_SPLIT}}",
+      "end_at_step": 10000,
+      "return_with_leftover_noise": "disable"
     }
   },
   "8": {
-    "class_type": "WanVideoDecode",
-    "inputs": {"vae": ["2", 0], "samples": ["6", 0], "enable_vae_tiling": true}
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["58", 0],
+      "vae": ["39", 0]
+    }
   },
-  "9": {
-    "class_type": "VHS_VideoCombine",
+  "60": {
+    "class_type": "CreateVideo",
     "inputs": {
       "images": ["8", 0],
-      "frame_rate": "{{FPS}}",
-      "format": "video/h264-mp4",
-      "filename_prefix": "simplecomfort_wan",
-      "pix_fmt": "yuv420p",
-      "crf": 18,
-      "save_output": true
+      "fps": "{{FPS}}"
+    }
+  },
+  "61": {
+    "class_type": "SaveVideo",
+    "inputs": {
+      "video": ["60", 0],
+      "filename_prefix": "simplecomfort_wan22",
+      "format": "auto",
+      "codec": "auto"
     }
   }
 }

@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import shutil
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -28,6 +29,8 @@ from comfy_client import (ComfyConnectionError, ComfyExecutionError,
 from project_manager import ClipRecord, ProjectManager
 
 log = logging.getLogger("simple_comfort.generation")
+
+_VIDEO_EXTS = {".mp4", ".webm", ".mov", ".mkv", ".m4v", ".gif", ".avi"}
 
 
 @dataclass
@@ -212,12 +215,23 @@ class GenerationManager:
                     self._update_eta(job)
                     await self._publish(job)
 
-                # Concatenate all sections.
-                job.message = "Concatenating sections..."
+                # Concatenate all sections (single video sections are copied
+                # through without a re-encode; still images become a short
+                # clip so the library/player always has an mp4).
+                job.message = "Assembling output..."
                 await self._publish(job)
-                await ffmpeg_utils.concat_videos(
-                    section_files, clip.final_video, fps=params.fps
-                )
+                if len(section_files) == 1:
+                    only = section_files[0]
+                    if only.suffix.lower() in _VIDEO_EXTS:
+                        shutil.copyfile(only, clip.final_video)
+                    else:
+                        await ffmpeg_utils.still_to_video(
+                            only, clip.final_video, fps=params.fps or 24
+                        )
+                else:
+                    await ffmpeg_utils.concat_videos(
+                        section_files, clip.final_video, fps=params.fps
+                    )
 
                 # Optional professional post-processing (denoise / interpolation).
                 await self._post_process(job, clip, params)
@@ -305,7 +319,9 @@ class GenerationManager:
         data = await client.get_image(
             media["filename"], media["subfolder"], media["type"]
         )
-        section_path = clip.sections_dir / f"section_{section.index:02d}.mp4"
+        # Keep the produced format (custom workflows may emit stills).
+        ext = Path(media["filename"]).suffix.lower() or ".mp4"
+        section_path = clip.sections_dir / f"section_{section.index:02d}{ext}"
         section_path.write_bytes(data)
         return section_path
 

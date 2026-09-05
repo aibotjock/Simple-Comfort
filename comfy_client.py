@@ -176,6 +176,12 @@ class ComfyUIClient:
 
         Forwards ComfyUI execution events (progress, preview images) to
         ``progress_cb``. Returns the history outputs for ``prompt_id``.
+
+        Three concurrent watchers race so nothing can hang forever: the WS
+        event stream, the caller's cancel event (which otherwise can't fire
+        while no WS traffic arrives), and a periodic history poll that
+        catches prompts whose completion event was missed or that were
+        removed from the server queue entirely.
         """
         session = await self._get_session()
         try:
@@ -187,21 +193,18 @@ class ComfyUIClient:
                 f"Could not open WebSocket to {self.base_url}: {exc}"
             ) from exc
 
-        try:
+        async def consume_ws() -> bool:
             async for msg in ws:
-                if cancel_event and cancel_event.is_set():
-                    await self.interrupt()
-                    raise asyncio.CancelledError()
-
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     event = json.loads(msg.data)
                     done = await self._handle_ws_event(
                         event, prompt_id, progress_cb
                     )
                     if done:
-                        break
+                        return True
                 elif msg.type == aiohttp.WSMsgType.BINARY:
-                    # Binary payload = preview image (8-byte header then PNG/JPEG).
+                    # Binary payload = preview image (8-byte header then
+                    # PNG/JPEG).
                     if progress_cb and len(msg.data) > 8:
                         await progress_cb({
                             "type": "preview",
@@ -209,7 +212,42 @@ class ComfyUIClient:
                         })
                 elif msg.type in (aiohttp.WSMsgType.CLOSED,
                                   aiohttp.WSMsgType.ERROR):
-                    break
+                    return False
+            return False
+
+        async def history_poll() -> bool:
+            # Fallback: the prompt may finish (or vanish) with no WS event
+            # ever reaching us — poll its history entry periodically.
+            while True:
+                await asyncio.sleep(5)
+                try:
+                    history = await self.get_history(prompt_id)
+                    if prompt_id in history:
+                        entry = history[prompt_id]
+                        status = (entry.get("status") or {})
+                        # Present but still running -> keep waiting.
+                        if status.get("completed") or \
+                                status.get("status_str") in ("error", "cancelled"):
+                            return True
+                except Exception:  # noqa: BLE001
+                    pass
+
+        try:
+            reader = asyncio.create_task(consume_ws())
+            watchers = [reader, asyncio.create_task(history_poll())]
+            cancel_waiter = None
+            if cancel_event is not None:
+                cancel_waiter = asyncio.create_task(cancel_event.wait())
+                watchers.append(cancel_waiter)
+
+            done, pending = await asyncio.wait(
+                watchers, return_when=asyncio.FIRST_COMPLETED
+            )
+            for task in pending:
+                task.cancel()
+            if cancel_waiter in done and cancel_event.is_set():
+                await self.interrupt()
+                raise asyncio.CancelledError()
         finally:
             await ws.close()
 
