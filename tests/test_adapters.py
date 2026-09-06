@@ -1,0 +1,223 @@
+"""Adapter registry and workflow-template tests (hermetic: no ComfyUI).
+
+Covers, per model adapter (ltx25 / wan22 / framepack):
+
+* ``build_adapters()`` registers exactly the three built-in engines;
+* every workflow template JSON parses and contains the loader / decode /
+  save nodes the engine requires;
+* building a prompt from a typical ``GenerationParams`` yields an API-format
+  dict whose nodes are well-formed (``class_type`` + non-empty ``inputs``)
+  and fully substituted (no ``{{PLACEHOLDER}}`` tokens remain anywhere).
+"""
+from __future__ import annotations
+
+from typing import Any, Dict, Iterator, List
+
+import pytest
+
+from adapters import (FramePackAdapter, GenerationParams, LTX25Adapter,
+                      Wan22Adapter, build_adapters)
+from adapters.base import ModelAdapter
+from adapters.framepack import MAX_TOTAL_SECONDS as FRAMEPACK_MAX_SECONDS
+
+# ---------------------------------------------------------------------- #
+# Helpers
+# ---------------------------------------------------------------------- #
+def class_types(prompt: Dict[str, Any]) -> set:
+    """The set of node class_type values in an API-format prompt."""
+    return {node["class_type"] for node in prompt.values()
+            if isinstance(node, dict)}
+
+
+def iter_strings(value: Any) -> Iterator[str]:
+    """Yield every string value anywhere inside a nested dict/list."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from iter_strings(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from iter_strings(v)
+
+
+def assert_nodes_wellformed(prompt: Dict[str, Any]) -> None:
+    """Every node is a dict with a class_type and a non-empty inputs dict."""
+    assert isinstance(prompt, dict) and prompt
+    for node_id, node in prompt.items():
+        assert isinstance(node, dict), f"node {node_id} is not a dict"
+        assert node.get("class_type"), f"node {node_id} missing class_type"
+        inputs = node.get("inputs")
+        assert isinstance(inputs, dict) and inputs, \
+            f"node {node_id} has no inputs"
+
+
+def assert_prompt_wellformed(prompt: Dict[str, Any]) -> None:
+    """A BUILT prompt: well-formed nodes and no placeholder left behind."""
+    assert_nodes_wellformed(prompt)
+    for text in iter_strings(prompt):
+        assert "{{" not in text, f"unsubstituted placeholder in: {text!r}"
+
+
+def assert_template_nodes(adapter: ModelAdapter, template: str,
+                          required: set) -> set:
+    """Load a template and assert the required class_types are present.
+
+    Raw templates legitimately contain ``{{TOKENS}}``; only their structure
+    is checked here — substitution is asserted on built prompts."""
+    workflow = adapter.load_workflow(template)
+    types = class_types(workflow)
+    missing = required - types
+    assert not missing, f"{template} missing nodes: {sorted(missing)}"
+    assert_nodes_wellformed(workflow)
+    return types
+
+
+def build_all_sections(adapter: ModelAdapter, params: GenerationParams):
+    """Map every section of a strategy; yields (section, workflow)."""
+    for section in adapter.get_section_strategy(params):
+        yield section, adapter.map_parameters(params, section, None)
+
+
+def typical_params(**overrides: Any) -> GenerationParams:
+    """A plain, fully-populated generation request."""
+    base = dict(
+        prompt="a slow pan across a quiet kitchen at dawn",
+        mode="t2v",
+        aspect_ratio="16:9",
+        quality="balanced",
+        lip_sync=True,
+        seed=42,
+        fps=24,
+    )
+    base.update(overrides)
+    return GenerationParams(**base)
+
+
+# ---------------------------------------------------------------------- #
+# Registry
+# ---------------------------------------------------------------------- #
+def test_build_adapters_registers_all_three_engines():
+    adapters = build_adapters()
+    assert set(adapters) == {"ltx25", "wan22", "framepack"}
+    assert isinstance(adapters["ltx25"], LTX25Adapter)
+    assert isinstance(adapters["wan22"], Wan22Adapter)
+    assert isinstance(adapters["framepack"], FramePackAdapter)
+
+
+# ---------------------------------------------------------------------- #
+# LTX 2.5
+# ---------------------------------------------------------------------- #
+LTX_REQUIRED = {"UNETLoader", "CLIPLoader", "VAELoader",
+                "TextGenerateLTX2Prompt", "VAEDecodeTiled", "SaveVideo"}
+
+@pytest.mark.parametrize("template", [
+    LTX25Adapter.T2V_TEMPLATE, LTX25Adapter.I2V_TEMPLATE,
+    LTX25Adapter.T2V_TEMPLATE_2STAGE, LTX25Adapter.I2V_TEMPLATE_2STAGE,
+])
+def test_ltx25_templates_parse_with_required_nodes(template):
+    assert_template_nodes(LTX25Adapter(), template, LTX_REQUIRED)
+
+
+def test_ltx25_prompt_substitutes_all_sections():
+    adapter = LTX25Adapter()
+    sections = list(build_all_sections(adapter, typical_params()))
+    # 30s target / 6s sections = 5 chained sections, 8k+1 frames each.
+    assert len(sections) == 5
+    for section, workflow in sections:
+        assert section.frames % 8 == 1
+        assert_prompt_wellformed(workflow)
+
+
+def test_ltx25_quality_presets_select_graph_variant():
+    adapter = LTX25Adapter()
+    _, balanced = next(iter(build_all_sections(adapter,
+                                               typical_params())))
+    _, draft = next(iter(build_all_sections(adapter,
+                                            typical_params(quality="draft"))))
+    # Two-stage adds the latent upsampler branch; draft stays single-stage.
+    assert "LatentUpscaleModelLoader" in class_types(balanced)
+    assert "LatentUpscaleModelLoader" not in class_types(draft)
+    assert adapter.resolve_quality(typical_params(quality="draft"))["steps"] \
+        == adapter.SINGLE_STAGE_STEPS
+    assert adapter.resolve_quality(typical_params())["steps"] \
+        == adapter.TWO_STAGE_STEPS
+
+
+def test_ltx25_i2v_stages_reference_image(reference_image):
+    adapter = LTX25Adapter()
+    params = typical_params(mode="i2v",
+                            reference_image=str(reference_image))
+    _, workflow = next(iter(build_all_sections(adapter, params)))
+    assert "LoadImage" in class_types(workflow)
+    staged = [s for s in iter_strings(workflow) if s.startswith("sc-")]
+    assert staged, "reference image was not staged into the graph"
+
+
+# ---------------------------------------------------------------------- #
+# Wan 2.2
+# ---------------------------------------------------------------------- #
+WAN_COMMON = {"UNETLoader", "LoraLoaderModelOnly", "ModelSamplingSD3",
+              "CLIPLoader", "VAELoader", "CLIPTextEncode", "KSamplerAdvanced",
+              "VAEDecodeTiled", "CreateVideo", "SaveVideo"}
+
+def test_wan22_templates_parse_with_required_nodes():
+    t2v_types = assert_template_nodes(Wan22Adapter(), Wan22Adapter.T2V_TEMPLATE,
+                                      WAN_COMMON)
+    i2v_types = assert_template_nodes(Wan22Adapter(), Wan22Adapter.I2V_TEMPLATE,
+                                      WAN_COMMON)
+    assert "EmptyHunyuanLatentVideo" in t2v_types
+    assert {"LoadImage", "WanImageToVideo"} <= i2v_types
+
+
+def test_wan22_prompt_substitutes_all_sections():
+    adapter = Wan22Adapter()
+    sections = list(build_all_sections(adapter, typical_params()))
+    # 30s target / 5s sections = 6 sections; 4n+1 frames at the native 16fps.
+    assert len(sections) == 6
+    for section, workflow in sections:
+        assert section.fps == Wan22Adapter.NATIVE_FPS
+        assert section.frames % 4 == 1
+        assert_prompt_wellformed(workflow)
+
+
+def test_wan22_i2v_uses_reference_template(reference_image):
+    adapter = Wan22Adapter()
+    params = typical_params(mode="i2v",
+                            reference_image=str(reference_image))
+    _, workflow = next(iter(build_all_sections(adapter, params)))
+    assert {"LoadImage", "WanImageToVideo"} <= class_types(workflow)
+    staged = [s for s in iter_strings(workflow) if s.startswith("sc-")]
+    assert staged, "reference image was not staged into the graph"
+
+
+# ---------------------------------------------------------------------- #
+# FramePack
+# ---------------------------------------------------------------------- #
+FRAMEPACK_REQUIRED = {"LoadFramePackModel", "DualCLIPLoader", "VAELoader",
+                      "LoadImage", "FramePackFindNearestBucket",
+                      "FramePackSampler", "VAEDecodeTiled", "SaveVideo"}
+
+def test_framepack_template_parses_with_required_nodes():
+    assert_template_nodes(FramePackAdapter(), FramePackAdapter.I2V_TEMPLATE,
+                          FRAMEPACK_REQUIRED)
+
+
+def test_framepack_is_single_section_within_node_bounds(reference_image):
+    adapter = FramePackAdapter()
+    params = typical_params(mode="i2v",
+                            reference_image=str(reference_image))
+    sections = adapter.get_section_strategy(params)
+    assert len(sections) == 1  # whole clip renders in one call
+    assert sections[0].approx_seconds <= FRAMEPACK_MAX_SECONDS
+    workflow = adapter.map_parameters(params, sections[0], None)
+    assert_prompt_wellformed(workflow)
+    assert "FramePackSampler" in class_types(workflow)
+
+
+def test_framepack_requires_reference_image():
+    adapter = FramePackAdapter()
+    params = typical_params(mode="i2v", reference_image=None)
+    section = adapter.get_section_strategy(params)[0]
+    with pytest.raises(ValueError, match="reference image"):
+        adapter.map_parameters(params, section, None)

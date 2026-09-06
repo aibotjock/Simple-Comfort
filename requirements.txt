@@ -6,3 +6,8 @@ aiohttp>=3.9.0
 aiofiles>=23.0.0
 python-multipart>=0.0.9
 Pillow>=10.0.0
+
+# --- Dev / test dependencies (not required at runtime) ------------------- #
+# Test suite in tests/: `./venv/bin/python -m pytest -q` from the repo root.
+pytest>=8.0.0
+httpx>=0.27.0  # fastapi TestClient transport for the in-process API tests
