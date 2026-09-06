@@ -59,7 +59,7 @@ class Wan22Adapter(ModelAdapter):
     REQUIRED_NODES = ["UNETLoader", "LoraLoaderModelOnly", "ModelSamplingSD3",
                       "CLIPLoader", "VAELoader", "CLIPTextEncode",
                       "KSamplerAdvanced", "EmptyHunyuanLatentVideo",
-                      "WanImageToVideo", "VAEDecode", "CreateVideo",
+                      "WanImageToVideo", "VAEDecodeTiled", "CreateVideo",
                       "SaveVideo"]
     # Both dual-expert families must exist (high-noise files are the marker).
     CHECKPOINT_HINTS = ["wan2.2_t2v_high", "wan2.2_i2v_high"]
