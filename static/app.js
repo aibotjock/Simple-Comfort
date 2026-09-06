@@ -101,11 +101,9 @@ function wirePromptCounter() {
   const ta = $("#prompt");
   const counter = $("#prompt-counter");
   if (!ta || !counter) return;
-  const max = ta.getAttribute("maxlength") || 500;
   const update = () => {
     const len = ta.value.length;
-    counter.textContent = `${len} / ${max}`;
-    counter.classList.toggle("warn", len > max * 0.9);
+    counter.textContent = `${len}`;
     // auto-grow up to ~8 rows
     ta.style.height = "auto";
     ta.style.height = Math.min(ta.scrollHeight, 260) + "px";

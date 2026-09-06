@@ -1,30 +1,84 @@
 {
-  "round": 1,
-  "bar": "official workflows in gauntlet/bar/ + live render on :8188",
-  "headline": "Gauntlet R1 CLOSED — all 7 engine templates pass live ComfyUI validation; real renders confirmed on both paths (Wan 2.2 30s multi-section via /api/generate, custom lightx2v workflow via drag-and-drop import); LTX 2.5 registered as the LTX-2.3 replacement",
-  "updated": "2026-09-05 00:55",
-  "phases": { "recon": "done", "downloads": "done", "build": "done", "critic": "done", "renders": "done" },
+  "round": 2,
+  "bar": "invoke-ai/InvokeAI (README · installer/model tooling · tests) + official ComfyUI workflows · critic judges blind",
+  "headline": "R2 CLOSED — 6/6 pieces won blind in round 1 (tiled decode · honest imports · cleanup · README · model tooling · 42-test suite); completeness audit passed, 5 peripheral gaps + 1 real bug fixed; verified live on :7788",
+  "updated": "2026-09-06 04:10",
+  "phases": {
+    "recon": "done",
+    "downloads": "done",
+    "build": "done",
+    "critic": "done",
+    "renders": "done"
+  },
   "engines": {
     "ltx25": {
       "name": "LTX 2.5",
       "state": "validated",
       "meta": "22B distilled int8 · Gemma enhancer in-graph · two-stage upscaler",
-      "note": "Adapter registered (LTX23 removed from registry + UI defaults), 4 templates pass server-side /prompt validation on ComfyUI 0.34.0. Model detection reports available.",
+      "note": "R1 closed: 4 templates pass live /prompt validation on ComfyUI 0.34.0.",
       "critic_round": 1
     },
     "wan22": {
       "name": "Wan 2.2",
       "state": "rendered",
       "meta": "14B MoE fp8 high+low · lightx2v 4-step · core-native",
-      "note": "t2v + i2v templates validated; full 30s 2-section render completed through /api/generate (640x384, chained sections, concat OK).",
+      "note": "R1: full 30s 2-section render completed through /api/generate.",
       "critic_round": 1
     },
     "framepack": {
       "name": "FramePack",
       "state": "validated",
       "meta": "Hunyuan fp8 · block swap · i2v long-form",
-      "note": "i2v template passes server-side validation; FramePackWrapper inputs match live object_info.",
+      "note": "R1: i2v template passes server-side validation.",
       "critic_round": 1
+    },
+    "r2-wan-tiled": {
+      "name": "R2 · Wan tiled decode",
+      "state": "win",
+      "meta": "VAEDecode → VAEDecodeTiled {512,64,64,8} in both templates + adapter",
+      "note": "critic verified params against live /object_info and re-ran validate_templates: 7/7 built-ins PASS",
+      "critic_round": 1,
+      "verdict": "ours"
+    },
+    "r2-import-validation": {
+      "name": "R2 · honest import validation",
+      "state": "win",
+      "meta": "import queue-validates defaults · invalid_defaults status · generate returns ComfyUI's own error",
+      "note": "verified live on :7788 — lightx2v custom workflow reports available:false + exact missing files",
+      "critic_round": 1,
+      "verdict": "ours"
+    },
+    "r2-cleanup": {
+      "name": "R2 · dead code + ghost cleanup",
+      "state": "win",
+      "meta": "ltx23 + custom nodes + stray files deleted · 6 ghost dirs gone · failed-job cleanup guard",
+      "note": "real clips md5-verified intact; _cleanup_empty_clip is content-guarded; job.model bug also fixed",
+      "critic_round": 1,
+      "verdict": "ours"
+    },
+    "r2-readme": {
+      "name": "R2 · README truth",
+      "state": "win",
+      "meta": "229 → 141 lines · 21 exact model filenames verified on disk · 0 stale engine mentions",
+      "note": "audit follow-ups: example workflow now git-tracked, installer/desktop strings say LTX 2.5, .env.example single-GPU default",
+      "critic_round": 1,
+      "verdict": "ours"
+    },
+    "r2-model-setup": {
+      "name": "R2 · model-setup tooling",
+      "state": "win",
+      "meta": "tools/check_models.py derives 21-file manifest from workflows · --json · exit 0/1 · reads .env",
+      "note": "3/3 engines READY on this box; missing-path proves exit=1 + install commands; uncertain URLs flagged verify",
+      "critic_round": 1,
+      "verdict": "ours"
+    },
+    "r2-tests": {
+      "name": "R2 · test suite",
+      "state": "win",
+      "meta": "42 hermetic tests: adapters · custom workflows · project store · API envelope · failure cleanup",
+      "note": "critic independently re-ran pytest and matched output; green with ComfyUI up OR down; no GPU, no live server",
+      "critic_round": 1,
+      "verdict": "ours"
     }
   }
 }
