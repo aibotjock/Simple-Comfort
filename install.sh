@@ -119,6 +119,13 @@ section "Step 4 — Detecting GPUs and configuring endpoints"
 GPU_COUNT=0
 if command -v nvidia-smi &>/dev/null; then
     GPU_COUNT=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | wc -l || echo 0)
+else
+    warn "nvidia-smi not found — NVIDIA driver may be missing."
+    warn "Install it (Ubuntu): sudo ubuntu-drivers autoinstall  then reboot. See GPU_SETUP.md."
+fi
+
+if [ "$GPU_COUNT" -eq 0 ]; then
+    warn "No GPUs detected by the driver. Run 'bash check-gpu.sh' to diagnose (see GPU_SETUP.md)."
 fi
 
 if [ ! -f ".env" ]; then
@@ -169,7 +176,10 @@ echo ""
 echo -e "  ${BOLD}To launch Simple-Comfort:${RESET}"
 echo ""
 if [ "$GPU_COUNT" -ge 2 ]; then
-    echo -e "    ${CYAN}Dual GPU (recommended):${RESET}"
+    echo -e "    ${CYAN}Verify GPUs first:${RESET}"
+    echo "      bash $INSTALL_DIR/check-gpu.sh"
+    echo ""
+    echo -e "    ${CYAN}Dual GPU (recommended — even 50/50 split across both cards):${RESET}"
     echo "      $INSTALL_DIR/launch-dual-gpu.sh"
     echo ""
     echo -e "    ${CYAN}Or single GPU:${RESET}"

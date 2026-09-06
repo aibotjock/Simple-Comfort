@@ -175,6 +175,7 @@ async def api_status():
                 "workers": [],
                 "multi_gpu": False,
                 "ffmpeg": _ffmpeg_ok(),
+                "gpus": _gpu_stats(),
                 "error": "worker pool not initialized",
             }
         await pool.refresh_health()
@@ -185,6 +186,7 @@ async def api_status():
             "workers": workers,
             "multi_gpu": pool.is_multi,
             "ffmpeg": _ffmpeg_ok(),
+            "gpus": _gpu_stats(),
         }
     except Exception as exc:  # noqa: BLE001
         log.exception("api_status failed")
@@ -193,6 +195,7 @@ async def api_status():
             "workers": [],
             "multi_gpu": False,
             "ffmpeg": False,
+            "gpus": [],
             "error": str(exc),
         }
 
@@ -372,6 +375,59 @@ def _ffmpeg_ok() -> bool:
         return bool(ffmpeg_utils.ffmpeg_available())
     except Exception:  # noqa: BLE001
         return False
+
+
+def _gpu_stats() -> List[dict]:
+    """Return per-GPU telemetry via ``nvidia-smi`` (empty list if unavailable).
+
+    Lets the UI / user *verify* the dual-GPU even split at a glance: with one
+    ComfyUI pinned per card and jobs alternating round-robin, both RTX 3090s
+    should show comparable memory use and utilization under load. Purely
+    informational and best-effort — never raises, so a missing driver simply
+    yields ``[]`` and the rest of the status still returns.
+    """
+    import shutil
+    import subprocess
+
+    if not shutil.which("nvidia-smi"):
+        return []
+    try:
+        out = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,name,memory.used,memory.total,utilization.gpu",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:  # noqa: BLE001
+        return []
+    if out.returncode != 0:
+        return []
+
+    gpus: List[dict] = []
+    for line in out.stdout.strip().splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 5:
+            continue
+        try:
+            index = int(parts[0])
+            mem_used = int(float(parts[2]))
+            mem_total = int(float(parts[3]))
+            util = int(float(parts[4]))
+        except (ValueError, IndexError):
+            continue
+        gpus.append({
+            "index": index,
+            "name": parts[1],
+            "memory_used_mb": mem_used,
+            "memory_total_mb": mem_total,
+            "memory_percent": round(100 * mem_used / mem_total, 1) if mem_total else 0.0,
+            "utilization_percent": util,
+        })
+    return gpus
 
 
 def _parse_int(value: Optional[str]) -> Optional[int]:

@@ -103,12 +103,27 @@ for a smooth transition to the next clip.
 | `launch.sh` | Start the app (ComfyUI assumed already running). |
 | `launch-single-gpu.sh` | Cold-start ComfyUI on GPU 0 (port 8188), point the app at it. |
 | `launch-dual-gpu.sh` | One ComfyUI per GPU (ports 8188/8189), skipping any instance already running, then launch. |
+| `check-gpu.sh` | GPU doctor: verifies the driver, both cards, per-index CUDA visibility, ComfyUI's torch build and the ComfyUI ports — prints the exact fix for anything wrong. Run it before `launch-dual-gpu.sh`. |
 | `install.sh` | Standalone installer: dependencies, GPU auto-detection, `.env`, desktop icon. |
 
 With two endpoints, jobs alternate round-robin across GPUs and the header
 shows a status chip per GPU — green idle, yellow busy, red offline — with a
 completed-jobs badge. The launchers only ever stop ComfyUI instances they
 started themselves.
+
+**Even 50/50 split:** dual-GPU mode runs **one ComfyUI per card** (GPU 0 →
+8188, GPU 1 → 8189, each pinned with `CUDA_VISIBLE_DEVICES`) and alternates
+jobs round-robin, so each RTX 3090 does ~half the work with the full 24 GB
+available to every model. Confirm it live with `nvidia-smi -l 1`, or read the
+per-card memory/utilization now included in `GET /api/status` (`"gpus"`).
+
+**Full driver / CUDA setup** — including dual RTX 3090 on Ubuntu 26, fixing a
+CPU-only torch, and running LM Studio / other LLMs alongside (time-share,
+per-card pinning, or a `50,50` tensor split) — is in
+[GPU_SETUP.md](GPU_SETUP.md). GPU/CUDA packages for the ComfyUI/LLM environment
+(torch+cuda, llama-cpp-python with CUDA, transformers/accelerate) are in
+[requirements-gpu.txt](requirements-gpu.txt) — install those into ComfyUI's
+venv, **not** the app's.
 
 ## Configuration
 

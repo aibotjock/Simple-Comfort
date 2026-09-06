@@ -120,19 +120,60 @@ wait_for() {
     return 1
 }
 
-# --- Verify CUDA before starting anything -----------------------------------
-# Without a driver ComfyUI comes up CPU-only and every job crawls — fail fast
-# with the fix instead. (Skipped when both instances are already running.)
+# --- Verify GPUs / CUDA before starting anything ----------------------------
+# Without a working driver ComfyUI comes up CPU-only and every job crawls —
+# fail fast with the fix instead. (Skipped when both instances are already
+# running.)
+#
+# The NVIDIA driver (nvidia-smi) is the SOURCE OF TRUTH for whether the GPUs
+# exist and are usable. The torch probe below is only ADVISORY: the app's own
+# python (used here as a fallback when ComfyUI has no venv) frequently has no
+# torch installed, which previously made this script abort with a bogus
+# "no CUDA devices" error even on a perfectly healthy dual-3090 box.
 if [ "$GPU0_RUNNING" = false ] || [ "$GPU1_RUNNING" = false ]; then
-    CUDA_DEVICES="$(CUDA_VISIBLE_DEVICES=0,1 "$COMFY_PY" \
-        -c 'import torch; print(torch.cuda.device_count())' 2>/dev/null || echo 0)"
-    if [ "$CUDA_DEVICES" = "0" ]; then
-        echo "[dual-gpu] ERROR: no CUDA devices visible — NVIDIA driver missing or broken." >&2
-        echo "  Check: nvidia-smi   Fix: sudo apt install -y nvidia-driver-595-open  (then reboot)" >&2
-        exit 1
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        SMI_COUNT="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | wc -l | tr -d ' ')"
+        if [ "${SMI_COUNT:-0}" -eq 0 ]; then
+            echo "[dual-gpu] ERROR: nvidia-smi reports 0 GPUs — NVIDIA driver missing or broken." >&2
+            echo "  Check: nvidia-smi" >&2
+            echo "  Fix (Ubuntu): sudo ubuntu-drivers autoinstall  (then reboot)" >&2
+            echo "  See GPU_SETUP.md for dual RTX 3090 driver setup on Ubuntu 26." >&2
+            exit 1
+        fi
+        # Confirm BOTH cards are individually addressable — a common failure
+        # mode is one card falling off the bus (bad riser/power) so only GPU 0
+        # shows up. Each ComfyUI instance is pinned to a single GPU index, so
+        # every index we intend to use must resolve on its own.
+        for idx in 0 1; do
+            if ! CUDA_VISIBLE_DEVICES="$idx" nvidia-smi -i 0 \
+                    --query-gpu=name --format=csv,noheader >/dev/null 2>&1; then
+                echo "[dual-gpu] WARNING: GPU index $idx not individually addressable — the instance pinned to it may fail." >&2
+            fi
+        done
+        if [ "$SMI_COUNT" -lt 2 ]; then
+            echo "[dual-gpu] WARNING: only $SMI_COUNT GPU(s) visible to the driver — the second instance may fail." >&2
+        else
+            echo "[dual-gpu] Driver sees $SMI_COUNT GPU(s) — good."
+        fi
+    else
+        echo "[dual-gpu] WARNING: nvidia-smi not found — cannot verify the driver. Continuing anyway." >&2
+        echo "  If jobs run on CPU, install the driver: sudo ubuntu-drivers autoinstall (then reboot)." >&2
     fi
-    if [ "$CUDA_DEVICES" != "2" ]; then
-        echo "[dual-gpu] WARNING: expected 2 CUDA devices, found $CUDA_DEVICES — the second instance may fail." >&2
+
+    # Advisory torch probe: only meaningful if the chosen python actually has
+    # torch. Never fatal — absence of torch here says nothing about the driver.
+    if "$COMFY_PY" -c 'import torch' >/dev/null 2>&1; then
+        CUDA_DEVICES="$(CUDA_VISIBLE_DEVICES=0,1 "$COMFY_PY" \
+            -c 'import torch; print(torch.cuda.device_count())' 2>/dev/null || echo 0)"
+        if [ "$CUDA_DEVICES" = "0" ]; then
+            echo "[dual-gpu] WARNING: torch in $COMFY_PY sees 0 CUDA devices — check the ComfyUI venv's CUDA build (see GPU_SETUP.md)." >&2
+        elif [ "$CUDA_DEVICES" != "2" ]; then
+            echo "[dual-gpu] WARNING: torch sees $CUDA_DEVICES CUDA device(s), expected 2 — the second instance may fail." >&2
+        else
+            echo "[dual-gpu] ComfyUI torch sees 2 CUDA devices — good."
+        fi
+    else
+        echo "[dual-gpu] Note: torch not importable from $COMFY_PY — skipping torch CUDA probe (driver check above is authoritative)."
     fi
 fi
 
