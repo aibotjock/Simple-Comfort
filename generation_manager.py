@@ -117,7 +117,7 @@ class GenerationManager:
         job_id = "job-" + uuid.uuid4().hex[:12]
         job = GenerationJob(
             job_id=job_id,
-            model=params.__dict__.get("_model", ""),
+            model=str(extra_metadata.get("model_key") or ""),
             mode=params.mode,
             status="queued",
         )
@@ -156,6 +156,7 @@ class GenerationManager:
             job.started_at = time.time()
 
             worker: Optional[Worker] = None
+            clip: Optional[ClipRecord] = None
             try:
                 await self.pool.refresh_health()
                 if not self.pool.any_alive():
@@ -268,8 +269,34 @@ class GenerationManager:
             finally:
                 if worker is not None:
                     await self.pool.release(worker)
+                # A job that died before its first section finished leaves a
+                # ghost clip dir (only an empty sections/). Drop it.
+                if job.status in ("failed", "cancelled") and clip is not None:
+                    self._cleanup_empty_clip(job, clip)
                 # Give WS consumers a moment to drain, then clean cancel event.
                 self._cancel_events.pop(job.job_id, None)
+
+    def _cleanup_empty_clip(self, job: GenerationJob, clip: ClipRecord) -> None:
+        """Remove a failed/cancelled job's clip directory, but only if empty.
+
+        Any real content keeps the directory on disk: a produced section,
+        ``final.mp4``, ``metadata.json`` or any other file anywhere inside
+        the clip tree. Cleanup must never mask the original job error.
+        """
+        if job.status not in ("failed", "cancelled"):
+            return
+        root = Path(clip.root)
+        try:
+            if not root.is_dir():
+                return
+            if (clip.final_video.exists() or clip.metadata_path.exists()
+                    or any(p.is_file() for p in root.rglob("*"))):
+                return
+            shutil.rmtree(root)
+            log.info("Job %s ended with no produced sections; removed empty "
+                     "clip dir %s", job.job_id, root)
+        except OSError as exc:
+            log.warning("Could not remove empty clip dir %s: %s", root, exc)
 
     async def _render_section(self, job: GenerationJob, adapter: ModelAdapter,
                               params: GenerationParams, section,
