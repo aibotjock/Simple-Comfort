@@ -16,6 +16,9 @@ Three pieces live here:
 * :class:`CustomWorkflowAdapter` / :class:`CustomWorkflowRegistry` — wrap an
   imported workflow in the normal :class:`ModelAdapter` contract so jobs run
   through the standard :class:`GenerationManager` pipeline unchanged.
+* :func:`queue_validate_prompt` — check a converted prompt against a live
+  ComfyUI using validate-and-discard (queue it, immediately delete it, never
+  render) so imports and generations fail honestly instead of at render time.
 """
 from __future__ import annotations
 
@@ -29,6 +32,8 @@ import re
 import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+import aiohttp
 
 from adapters.base import (GenerationParams, ModelAdapter, SectionConfig,
                            ModelStatus)
@@ -535,6 +540,81 @@ def stage_image_values(values: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------- #
+# Live queue validation (validate-and-discard — never rendered)
+# ---------------------------------------------------------------------- #
+def parse_validation_errors(body: str) -> List[str]:
+    """Turn a ComfyUI ``/prompt`` rejection body into readable strings.
+
+    ComfyUI answers 400 with ``{"error": ..., "node_errors": {node_id:
+    {"class_type": ..., "errors": [{message, details, ...}]}}}``; the
+    ``details`` text names the offending value (e.g. a model file that is
+    not installed).
+    """
+    try:
+        detail = json.loads(body)
+    except json.JSONDecodeError:
+        return [body[:400]]
+    errors: List[str] = []
+    for nid, node in (detail.get("node_errors") or {}).items():
+        ctype = node.get("class_type") or "node"
+        for err in node.get("errors") or []:
+            msg = f"{ctype} #{nid}: {err.get('details') or err.get('message')}"
+            errors.append(msg if len(msg) <= 240 else msg[:240] + "…")
+    if not errors:
+        top = detail.get("error")
+        msg = top.get("message") if isinstance(top, dict) else None
+        errors.append(str(msg or body[:240]))
+    return errors
+
+
+async def queue_validate_prompt(base_url: str,
+                                workflow: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate ``workflow`` against a live ComfyUI without rendering it.
+
+    Same mechanism as validate_templates.py: POST the prompt to ``/prompt``
+    (ComfyUI validates the full graph server-side and answers 400 with
+    per-node errors for invalid values such as missing model files), then
+    immediately delete the accepted prompt id from the queue so no GPU time
+    is spent.
+
+    Returns record fields — ``{"validated": True, "validated_at": ...}`` or
+    ``{"validated": False, "validated_at": ..., "validation_errors": [...]}``.
+    Network failures propagate to the caller, which records them as
+    "unknown" (``validated: None``), never as "invalid".
+    """
+    url = base_url.rstrip("/")
+    outcome: Dict[str, Any] = {"validated": True, "validated_at": _now_iso()}
+    async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=30)) as session:
+        async with session.post(
+            f"{url}/prompt",
+            json={"prompt": workflow, "client_id": "simple-comfort-validate"},
+        ) as resp:
+            text = await resp.text()
+            if resp.status != 200:
+                outcome["validated"] = False
+                outcome["validation_errors"] = parse_validation_errors(text)
+                return outcome
+            try:
+                prompt_id = json.loads(text).get("prompt_id")
+            except json.JSONDecodeError:
+                prompt_id = None
+        if prompt_id:
+            # Accepted — pull it back off the queue so no GPU time is spent
+            # (one retry in case the delete races the execution loop).
+            for attempt in (1, 2):
+                try:
+                    async with session.post(f"{url}/queue",
+                                            json={"delete": [prompt_id]}):
+                        pass
+                    break
+                except aiohttp.ClientError:
+                    if attempt == 2:
+                        raise
+    return outcome
+
+
+# ---------------------------------------------------------------------- #
 # Adapter
 # ---------------------------------------------------------------------- #
 class CustomWorkflowAdapter(ModelAdapter):
@@ -543,22 +623,39 @@ class CustomWorkflowAdapter(ModelAdapter):
     SUPPORTED_MODES = {"t2v", "i2v"}
 
     def __init__(self, slug: str, name: str, workflow: Dict[str, Any],
-                 schema: Dict[str, Any], source_format: str = "api"):
+                 schema: Dict[str, Any], source_format: str = "api",
+                 validated: Optional[bool] = None,
+                 validation_errors: Optional[List[str]] = None):
         self.slug = slug
         self.MODEL_KEY = f"custom:{slug}"
         self.MODEL_NAME = name
         self.workflow = workflow
         self.schema = schema
         self.source_format = source_format
+        # Live-validation verdict for the workflow's DEFAULT values:
+        # True/False once checked against a live ComfyUI; None = not yet
+        # checked (imported while ComfyUI was down, or a legacy record).
+        self.validated = validated
+        self.validation_errors = validation_errors or []
 
-    # -- detection: custom workflows are always "ready" ------------------ #
+    # -- detection: honest about whether the defaults actually queue ----- #
     def detect_capabilities(self, object_info, model_files) -> ModelStatus:
         status = ModelStatus(model=self.MODEL_KEY, display_name=self.MODEL_NAME)
-        status.available = True
-        status.status = "available"
-        status.detail = "Imported ComfyUI workflow"
         status.t2v_capable = True
         status.i2v_capable = bool(self.schema.get("has_image_input"))
+        if self.validated is False:
+            status.available = False
+            status.status = "invalid_defaults"
+            status.detail = ("Workflow defaults fail ComfyUI validation — "
+                             "fix the highlighted values: "
+                             + "; ".join(self.validation_errors[:2]))
+            status.missing = list(self.validation_errors)
+            return status
+        status.available = True
+        status.status = "available"
+        status.detail = ("Imported ComfyUI workflow"
+                         + (" (defaults validated)" if self.validated
+                            else " (defaults not yet validated)"))
         return status
 
     # -- single section: the graph renders in one go --------------------- #
@@ -646,7 +743,8 @@ class CustomWorkflowRegistry:
         return self.adapters.get(f"custom:{slug}") if rec else None
 
     async def add(self, filename: str, data: bytes,
-                  object_info: Optional[Dict[str, Any]]
+                  object_info: Optional[Dict[str, Any]],
+                  comfy_url: Optional[str] = None,
                   ) -> Dict[str, Any]:
         name = Path(filename).stem or "workflow"
         try:
@@ -669,6 +767,18 @@ class CustomWorkflowRegistry:
             log.info("Imported workflow '%s' has no recognised output node",
                      name)
 
+        # Live queue-validation of the DEFAULT values (validate-and-discard —
+        # nothing renders). The import still succeeds on failure: the user
+        # can fix the values in the UI, and ComfyUI may just be down.
+        validation: Dict[str, Any] = {"validated": None,
+                                      "validated_at": _now_iso()}
+        if comfy_url:
+            try:
+                validation = await queue_validate_prompt(comfy_url, parsed)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Import-time validation unavailable for '%s': %s",
+                            name, exc)
+
         slug = _slugify(name)
         while slug in self.records:
             slug += "-2" if not slug.endswith("2") else "x"
@@ -682,7 +792,13 @@ class CustomWorkflowRegistry:
             "format": fmt,
             "imported_at": _now_iso(),
             "schema": schema,
+            "validated": validation.get("validated"),
+            "validated_at": validation.get("validated_at"),
         }
+        if rec["validated"] is False:
+            rec["validation_errors"] = (
+                validation.get("validation_errors")
+                or ["ComfyUI rejected the workflow defaults."])
         self._register(slug, rec)
         self._save_manifest()
         return rec
@@ -700,14 +816,61 @@ class CustomWorkflowRegistry:
     def _register(self, slug: str, rec: Dict[str, Any]) -> None:
         wf_path = STORE_DIR / rec["file"]
         workflow = json.loads(wf_path.read_text(encoding="utf-8"))
+        # Legacy records predate validation and simply have no
+        # "validated"/"validation_errors" keys — rec.get() keeps them
+        # loading unchanged (verdict: not yet validated).
         adapter = CustomWorkflowAdapter(
             slug, rec["name"], workflow, rec.get("schema") or {},
             rec.get("format", "api"),
+            validated=rec.get("validated"),
+            validation_errors=rec.get("validation_errors"),
         )
         if not adapter.schema:
             adapter.schema = introspect(workflow)
         self.adapters[adapter.MODEL_KEY] = adapter
         self.records[slug] = rec
+
+    def record_validation(self, slug: str,
+                          outcome: Dict[str, Any]) -> None:
+        """Persist a validation verdict onto the record, adapter, manifest."""
+        rec = self.records.get(slug)
+        if not rec:
+            return
+        rec["validated"] = outcome.get("validated")
+        rec["validated_at"] = outcome.get("validated_at") or _now_iso()
+        if rec["validated"] is False:
+            rec["validation_errors"] = (
+                outcome.get("validation_errors")
+                or ["ComfyUI rejected the workflow defaults."])
+        else:
+            rec.pop("validation_errors", None)
+        adapter = self.adapters.get(f"custom:{slug}")
+        if isinstance(adapter, CustomWorkflowAdapter):
+            adapter.validated = rec["validated"]
+            adapter.validation_errors = rec.get("validation_errors") or []
+        self._save_manifest()
+
+    async def revalidate_stale(self, comfy_url: str) -> None:
+        """(Re-)check the defaults of records without a live verdict.
+
+        Covers legacy records imported before validation existed, records
+        imported while ComfyUI was unreachable, and previously-invalid ones
+        (the missing models may have been installed since). Already-valid
+        records are left alone.
+        """
+        for slug, rec in list(self.records.items()):
+            if rec.get("validated") is True:
+                continue
+            try:
+                workflow = json.loads(
+                    (STORE_DIR / rec["file"]).read_text(encoding="utf-8"))
+                outcome = await queue_validate_prompt(comfy_url, workflow)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Revalidation skipped for '%s': %s", slug, exc)
+                return  # worker unreachable — stop rather than retry-loop
+            self.record_validation(slug, outcome)
+            log.info("Custom workflow '%s' defaults %s", slug,
+                     "validated" if outcome.get("validated") else "INVALID")
 
     def _save_manifest(self) -> None:
         MANIFEST_PATH.write_text(json.dumps(self.records, indent=2),

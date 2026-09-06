@@ -28,6 +28,7 @@ from fastapi.staticfiles import StaticFiles
 from adapters import GenerationParams, build_adapters
 from avatar_manager import AvatarManager
 from custom_workflows import (CustomWorkflowError, CustomWorkflowRegistry,
+                              apply_values, queue_validate_prompt,
                               stage_image_values)
 from broll_manager import (BRollCategory, BRollRequest, list_categories,
                            prepare_generation_params)
@@ -120,6 +121,17 @@ async def lifespan(app: FastAPI):
         await state.pool.refresh_health()
     except Exception as exc:  # noqa: BLE001
         log.warning("Initial health check failed: %s", exc)
+
+    # Legacy imports predate import-time validation; re-check their
+    # defaults against a live worker (validate-and-discard, never rendered)
+    # so /api/models never claims more than we actually know.
+    alive = next((w for w in state.pool.workers if w.alive), None)
+    if alive:
+        try:
+            await state.custom_workflows.revalidate_stale(
+                alive.client.base_url)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Custom workflow revalidation failed: %s", exc)
 
     yield
 
@@ -222,16 +234,28 @@ async def api_last_clip():
 # ---------------------------------------------------------------------- #
 # Custom workflow import (drag & drop ComfyUI JSON)
 # ---------------------------------------------------------------------- #
-async def _live_object_info():
-    """Fetch /object_info from the first alive worker (or None)."""
+async def _live_worker():
+    """Return the first alive worker after a health refresh (or None)."""
     try:
         await state.pool.refresh_health()
         for worker in state.pool.workers:
             if worker.alive:
-                return await worker.client.get_object_info()
+                return worker
+    except Exception as exc:  # noqa: BLE001
+        log.debug("worker health refresh failed: %s", exc)
+    return None
+
+
+async def _live_object_info():
+    """Fetch /object_info from the first alive worker (or None)."""
+    worker = await _live_worker()
+    if worker is None:
+        return None
+    try:
+        return await worker.client.get_object_info()
     except Exception as exc:  # noqa: BLE001
         log.debug("object_info fetch failed: %s", exc)
-    return None
+        return None
 
 
 @app.get("/api/custom-workflows")
@@ -245,12 +269,25 @@ async def api_custom_workflows_add(file: UploadFile = File(...)):
     if len(data) > 8 * 1024 * 1024:
         return err("Workflow file too large (max 8MB).")
     try:
-        object_info = await _live_object_info()
+        worker = await _live_worker()
+        object_info = None
+        if worker:
+            try:
+                object_info = await worker.client.get_object_info()
+            except Exception as exc:  # noqa: BLE001
+                log.debug("object_info fetch failed: %s", exc)
+        # Import queue-validates the defaults when a worker is reachable;
+        # the import still succeeds (with validated:false recorded) if the
+        # defaults are broken or ComfyUI is down.
         record = await state.custom_workflows.add(
-            file.filename or "workflow.json", data, object_info
+            file.filename or "workflow.json", data, object_info,
+            comfy_url=worker.client.base_url if worker else None,
         )
     except CustomWorkflowError as exc:
         return err(str(exc))
+    # The new engine (and its validation verdict) must show up in
+    # /api/models immediately, not after the detector's cache TTL.
+    state.detector.invalidate()
     return ok(record)
 
 
@@ -258,6 +295,7 @@ async def api_custom_workflows_add(file: UploadFile = File(...)):
 async def api_custom_workflows_delete(slug: str):
     if not state.custom_workflows.remove(slug):
         return err(f"Unknown workflow '{slug}'", status_code=404)
+    state.detector.invalidate()
     return ok()
 
 
@@ -272,6 +310,36 @@ async def api_custom_generate(slug: str, body: dict = Body(...)):
         values = stage_image_values(values)
     except CustomWorkflowError as exc:
         return err(str(exc))
+
+    # Honest failure up front: ask ComfyUI to validate the exact prompt this
+    # job would submit (validate-and-discard — an accepted prompt is deleted
+    # from the queue immediately and never rendered). ComfyUI's own error
+    # text (naming e.g. missing model files) goes straight to the envelope.
+    adapter = state.custom_workflows.get_adapter(slug)
+    worker = await _live_worker()
+    if worker is None or adapter is None:
+        return err("No ComfyUI endpoint is reachable. Start ComfyUI and "
+                   "check COMFY_ENDPOINTS.", status_code=503)
+    try:
+        outcome = await queue_validate_prompt(
+            worker.client.base_url,
+            apply_values(adapter.workflow, values),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return err(f"Could not validate the workflow against ComfyUI: {exc}",
+                   status_code=503)
+    if outcome.get("validated") is False:
+        return err("ComfyUI rejected this workflow: "
+                   + " | ".join(outcome.get("validation_errors") or []),
+                   status_code=400)
+    if record.get("validated") is not True:
+        # First live check of this record's defaults — persist the verdict.
+        try:
+            defaults = await queue_validate_prompt(
+                worker.client.base_url, adapter.workflow)
+            state.custom_workflows.record_validation(slug, defaults)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("Default revalidation skipped: %s", exc)
 
     schema = record.get("schema") or {}
     mode = "i2v" if schema.get("has_image_input") else "t2v"

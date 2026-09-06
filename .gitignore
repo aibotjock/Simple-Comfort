@@ -27,4 +27,7 @@ ComfyUI/
 simple_comfort_source.zip
 
 # User-imported custom workflows (runtime data)
-custom_workflows/
+custom_workflows/*
+
+# ...but keep the bundled example workflow tracked
+!custom_workflows/lightx2v-t2v-4step-nativecomfy.json

@@ -24,6 +24,8 @@ class ModelStatus:
     display_name: str
     status: str = "unknown"  # available | missing_checkpoint | missing_vae |
     #                          missing_text_encoder | missing_nodes | unreachable
+    #                          | invalid_defaults (custom workflow defaults
+    #                          rejected by live ComfyUI validation)
     available: bool = False
     t2v_capable: bool = False
     i2v_capable: bool = False
