@@ -3,7 +3,7 @@ Version=1.0
 Type=Application
 Name=Simple-Comfort
 GenericName=AI Video Generator
-Comment=Generate 30-second AI video clips locally with LTX-2.3, Wan 2.2, or FramePack
+Comment=Generate 30-second AI video clips locally with LTX 2.5, Wan 2.2, or FramePack
 # NOTE: This is a TEMPLATE. Run install_desktop_icon.sh to install it properly
 # with absolute paths. The {{APP_DIR}} placeholder is substituted by the
 # installer with the real application directory.

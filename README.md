@@ -1,228 +1,143 @@
 # Simple-Comfort
 
-> A deliberately simple local WebUI for generating 30-second AI video clips.
+> Local, one-click 30-second AI video — LTX 2.5, Wan 2.2 and FramePack behind one deliberately simple web UI.
 
-Simple-Comfort is a thin, local-only web front end that wraps a running
-[ComfyUI](https://github.com/comfyanonymous/ComfyUI) instance and turns it into
-a one-click **30-second AI video generator**. You pick a model, type a prompt
-(or drop a reference image), and it handles all the internal sectioning,
-frame-to-frame continuity, and stitching to produce a single 30-second clip.
+Simple-Comfort is a local-only FastAPI app that drives a running
+[ComfyUI](https://github.com/comfyanonymous/ComfyUI) instance. Pick an engine,
+type a prompt (or drop a reference image), and it handles sectioning,
+last-frame continuity, FFmpeg stitching and per-GPU scheduling to deliver one
+finished clip. No cloud calls, no API keys, no telemetry.
 
-No cloud calls, no API keys, no telemetry — everything runs on your machine.
-
----
-
-## Quick Start
-
-1. Install **Python 3.10+**.
-2. Run `./setup.sh` (Linux/macOS) or `setup.bat` (Windows) — creates a virtual
-   environment and installs all dependencies.
-3. Install and start **ComfyUI** on port **8188**.
-4. Run `./launch.sh` (Linux/macOS), double-click `launch.bat` (Windows), or use
-   the desktop icon.
-5. Open <http://localhost:7788> in your browser.
-
-> **If you see "Server error" in the UI**, run `setup.sh` (or `setup.bat`) first
-> to install the required dependencies, then relaunch.
-
----
-
-## Features
-
-- **One-click 30s clips** — the app automatically splits generation into
-  model-appropriate sections, carries the last frame of each section into the
-  next for continuity, and concatenates everything with FFmpeg.
-- **Three model back-ends** — LTX-2.3, Wan 2.2 and FramePack, each behind a
-  self-contained adapter.
-- **Text-to-Video and Image-to-Video** — with drag-and-drop reference images.
-- **Continuity** — continue a new clip from the last frame of a previous one.
-- **Live progress** — real-time progress, ETA and preview frames over WebSocket.
-- **Multi-GPU** — point it at several ComfyUI endpoints and it load-balances
-  across them.
-- **Lip-Sync Ready** — an optional prompt-conditioning mode that favours stable,
-  clearly visible faces for downstream lip-sync tooling.
-
----
-
-## Requirements
-
-- **Python 3.10+**
-- **FFmpeg** (both `ffmpeg` and `ffprobe` on your `PATH`)
-- A running **ComfyUI** instance (local by default at `http://127.0.0.1:8188`)
-- At least one of the supported model families installed in ComfyUI:
-  - **LTX-2.3**
-  - **Wan 2.2** (TI2V-5B)
-  - **FramePack**
-
----
-
-## Installation
+## Quick start
 
 ```bash
-pip install -r requirements.txt
+./setup.sh      # 1. create venv + install dependencies (once)
+#                2. start ComfyUI (default http://127.0.0.1:8188)
+./launch.sh     # 3. start Simple-Comfort
+#                4. open http://localhost:7788
 ```
 
----
+Requires Python 3.10+, FFmpeg (`ffmpeg` + `ffprobe`) on PATH, and the model
+files listed below. Windows equivalents: `setup.bat`, `launch.bat`.
 
-## Launch
+## Engines
 
-Start ComfyUI first, then run:
+| Engine | Modes | How it renders |
+|--------|-------|----------------|
+| **LTX 2.5** | T2V, I2V | 22B int8 distilled transformer. ~6 s sections chained on each section's last frame (24 fps). `draft` = single-stage, 8 steps; `balanced`/`quality` = two-stage, 8+3 steps decoding at 2x resolution. Joint audio/video model — every section ships generated audio. The Gemma prompt enhancer runs **inside the graph**, so every prompt is rewritten locally. |
+| **Wan 2.2** | T2V, I2V | 14B fp8 dual-expert (high-noise + low-noise pairs for both t2v and i2v). Six 5 s sections at 16 fps. `draft`/`balanced` use the official lightx2v 4-step distilled config; `quality` switches to the standard 20-step path. |
+| **FramePack** | I2V only | Hunyuan fp8. One progressive call renders the whole clip (30 fps) with built-in anti-drift. T2V is honestly disabled in the UI — the sampler requires a start image. |
 
-```bash
-python app.py
-```
+Engine availability is auto-detected from your ComfyUI (nodes + model
+folders); anything missing is shown in the UI with the exact reason.
 
-Then open <http://localhost:7788> in your browser.
+## Model files
 
-You can also use the convenience launchers (no install required):
+Exact filenames the built-in workflows load, with approximate on-disk sizes.
+Place each in the matching ComfyUI models subfolder. Verify your install with
+`./venv/bin/python tools/check_models.py` (reads `COMFY_PATH`/`COMFY_ENDPOINTS`
+from the environment or the repo `.env`; exits non-zero if anything is missing —
+see `tools/MODELS.md` for sources).
 
-- **Linux / macOS:** `./launch.sh`
-- **Windows:** double-click `launch.bat`
+| File | Size | Used by |
+|------|------|---------|
+| `ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors` | 20 GB | LTX 2.5 transformer (int8) |
+| `gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors` | 14 GB | LTX 2.5 text encoder |
+| `gemma4_e2b_it_int8_convrot.safetensors` | 5 GB | LTX 2.5 in-graph prompt enhancer |
+| `ltx-2.5-video-vae-bf16.safetensors` | 1.4 GB | LTX 2.5 video VAE |
+| `ltx-2.5-audio-vae-bf16.safetensors` | 0.3 GB | LTX 2.5 audio VAE |
+| `ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors` | 0.9 GB | LTX 2.5 two-stage upscaler |
+| `wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors` | 13 GB | Wan t2v high-noise expert |
+| `wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors` | 13 GB | Wan t2v low-noise expert |
+| `wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors` | 13 GB | Wan i2v high-noise expert |
+| `wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors` | 13 GB | Wan i2v low-noise expert |
+| `umt5_xxl_fp8_e4m3fn_scaled.safetensors` | 6 GB | Wan text encoder |
+| `wan_2.1_vae.safetensors` | 0.2 GB | Wan VAE |
+| `wan2.2_t2v_lightx2v_4steps_lora_v1.1_high_noise.safetensors` | 1.1 GB | Wan t2v 4-step LoRA |
+| `wan2.2_t2v_lightx2v_4steps_lora_v1.1_low_noise.safetensors` | 1.1 GB | Wan t2v 4-step LoRA |
+| `wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors` | 1.1 GB | Wan i2v 4-step LoRA |
+| `wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors` | 1.1 GB | Wan i2v 4-step LoRA |
+| `FramePackI2V_HY_fp8_e4m3fn.safetensors` | 15 GB | FramePack sampler model |
+| `llava_llama3_fp8_scaled.safetensors` | 8.5 GB | FramePack LLaVA text encoder |
+| `clip_l.safetensors` | 0.2 GB | FramePack dual-CLIP (with LLaVA) |
+| `hunyuan_video_vae_bf16.safetensors` | 0.5 GB | FramePack VAE |
+| `sigclip_vision_patch14_384.safetensors` | 0.8 GB | FramePack CLIP vision |
 
----
+## Custom workflows
 
-## Dual GPU Setup (RTX 3090 / Multi-GPU)
+Drop any ComfyUI workflow JSON onto the **Workflows** panel:
 
-If you have two (or more) GPUs, Simple-Comfort can run one ComfyUI instance per
-GPU and **alternate jobs between them (round-robin)** — job 1 → GPU 0, job 2 →
-GPU 1, job 3 → GPU 0, and so on. This roughly doubles throughput when you queue
-multiple clips.
+- **API-format** exports (`Save (API format)`) import as-is.
+- **Editor/UI-format** exports are converted to API format automatically
+  (ComfyUI must be running so node definitions can be resolved).
+- **Subgraph** exports are rejected with guidance to re-export flat via
+  `Save (API format)` — subgraphs cannot be flattened.
 
-### Quick start
+A form is generated from the graph's own inputs (prompts, seeds, resolutions,
+model pickers) and the workflow becomes a selectable engine. One example ships
+in `custom_workflows/`: a Wan t2v lightx2v 4-step graph.
 
-Instead of `python3 app.py`, run:
+## Panels
 
-```bash
-./launch-dual-gpu.sh
-```
+- **Avatars** — three reusable character slots: portrait, thumbnail, notes,
+  linked voice.
+- **Voices** — audio samples (wav/mp3/m4a) linkable to avatars; attach one to
+  a clip as its narration track.
+- **B-roll** — 8–10 s supporting shots from fixed categories (cinematic,
+  explanatory, product, environment, technology, abstract, transition);
+  deterministic prompts.
+- **Workflows** — custom workflow import (above).
+- **Sequence** — per-project timeline: reorder clips, b-roll and bridge clips.
+- **Export** — zip a project as video-only, a lip-sync handoff package
+  (MP4s + last frames + narration + manifest) or a full project archive.
 
-This script:
+**Bridge clips**: from a finished clip's action row, generate a short I2V
+clip conditioned on that clip's final frame, then insert it in the sequence
+for a smooth transition to the next clip.
 
-1. **Checks whether ComfyUI is already running** on ports 8188 and 8189
-   (`curl .../system_stats`). **If an instance is already running on a port, it
-   is left alone — Simple-Comfort connects to it and does NOT restart it.**
-2. Cold-starts **only** the instance(s) that are not already responding
-   (`CUDA_VISIBLE_DEVICES=0` on port 8188, `CUDA_VISIBLE_DEVICES=1` on port 8189).
-3. Waits for both instances to respond.
-4. Writes `COMFY_ENDPOINTS=http://127.0.0.1:8188,http://127.0.0.1:8189` to `.env`.
-5. Launches Simple-Comfort, which automatically load-balances across both GPUs.
+## Dual GPU & launchers
 
-> **Already running ComfyUI?** If you already have ComfyUI up on both ports
-> (e.g. started by your own launcher), Simple-Comfort connects to them
-> automatically — it will **not** start or kill your existing ComfyUI session.
-> In that case you can also just copy `.env.example` to `.env` (which already
-> lists both dual-GPU endpoints) and run `./launch.sh` or the desktop icon.
+| Script | What it does |
+|--------|--------------|
+| `setup.sh` | Create venv + install dependencies (once). |
+| `launch.sh` | Start the app (ComfyUI assumed already running). |
+| `launch-single-gpu.sh` | Cold-start ComfyUI on GPU 0 (port 8188), point the app at it. |
+| `launch-dual-gpu.sh` | One ComfyUI per GPU (ports 8188/8189), skipping any instance already running, then launch. |
+| `install.sh` | Standalone installer: dependencies, GPU auto-detection, `.env`, desktop icon. |
 
-When both ComfyUI instances are up, the header shows a **status chip per GPU**
-(`GPU 0`, `GPU 1`) with a colored dot — green = idle, yellow = busy, red =
-offline — and a `✓N` badge counting completed jobs on each GPU.
-
-On exit (Ctrl-C), only the ComfyUI instances that **this script started** are
-stopped — an already-running session you started yourself is left untouched.
-
-### Single GPU
-
-For a single GPU, use:
-
-```bash
-./launch-single-gpu.sh
-```
-
-This starts one ComfyUI instance on GPU 0 (port 8188), writes
-`COMFY_ENDPOINTS=http://127.0.0.1:8188` to `.env`, and launches Simple-Comfort.
-
-### ComfyUI location
-
-The launchers look for ComfyUI in `~/ComfyUI`, `~/comfyui`, `/opt/ComfyUI`, and
-`~/AI/ComfyUI`. If yours is elsewhere, point them at it:
-
-```bash
-COMFYUI_PATH=/path/to/ComfyUI ./launch-dual-gpu.sh
-```
-
-### Manual configuration
-
-You can skip the launch scripts and configure endpoints yourself. Start your
-ComfyUI instances however you like, then set in `.env`:
-
-```ini
-COMFY_ENDPOINTS=http://127.0.0.1:8188,http://127.0.0.1:8189
-```
-
-Simple-Comfort treats each endpoint as an independent GPU worker and alternates
-jobs across all alive workers.
-
----
-
-## Desktop icon
-
-To install a proper desktop icon / application-menu entry:
-
-- **Linux / macOS:**
-  ```bash
-  bash install_desktop_icon.sh
-  ```
-  On Linux this installs the icon into your XDG icon theme, generates an
-  executable `simple-comfort-launch.sh` wrapper, writes a `.desktop` entry that
-  points at that wrapper, and (on GNOME) marks the desktop shortcut as trusted.
-  On macOS it builds a `Simple-Comfort.app` bundle in `~/Applications`.
-
-- **Windows:**
-  ```bat
-  install_desktop_icon.bat
-  ```
-
-The bundled `simple-comfort.desktop` is a **template**: it contains
-`{{APP_DIR}}` placeholders that the installer substitutes with real absolute
-paths. Do not use it directly — always run the installer.
-
----
-
-## Models
-
-| Model | Modes | Strategy |
-|-------|-------|----------|
-| **LTX-2.3** | T2V, I2V | Two ~15-second sections; section 2 is conditioned on the last frame of section 1. Fast and lightweight. |
-| **Wan 2.2** (TI2V-5B) | T2V, I2V | Six 5-second sections rendered natively, each conditioned on the previous section's last frame. Strong prompt adherence and motion. |
-| **FramePack** | I2V (T2V if supported by your build) | Progressive single-call generation of the full 30 seconds with built-in anti-drift; I2V always available. |
-
-Model availability is auto-detected from your ComfyUI installation — models that
-are missing required checkpoints, VAEs, text encoders or custom nodes are shown
-as unavailable in the UI with an explanation.
-
----
+With two endpoints, jobs alternate round-robin across GPUs and the header
+shows a status chip per GPU — green idle, yellow busy, red offline — with a
+completed-jobs badge. The launchers only ever stop ComfyUI instances they
+started themselves.
 
 ## Configuration
 
-All settings are read from environment variables (or a local `.env` file):
+All settings come from environment variables or a `.env` file:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `COMFY_ENDPOINTS` | `http://127.0.0.1:8188` | Comma-separated list of ComfyUI endpoints. Each is treated as an independent GPU worker. |
-| `PORT` | `7788` | Port the web UI binds to (localhost only). |
+| `COMFY_ENDPOINTS` | `http://127.0.0.1:8188` | Comma-separated ComfyUI endpoints; each is one GPU worker. |
+| `PORT` | `7788` | Web UI port. |
 | `HOST` | `127.0.0.1` | Bind address. |
-| `OUTPUT_DIR` | `outputs` | Base directory for generated clips and projects. |
-| `MAX_CONCURRENT_JOBS` | `2` | Maximum generations running at once. |
+| `OUTPUT_DIR` | `outputs` | Base directory for clips, projects and uploads. |
+| `MAX_CONCURRENT_JOBS` | `2` | Generations running at once. |
 | `COMFY_TIMEOUT` | `300` | Per-section render timeout (seconds). |
+| `MODEL_CACHE_TTL` | `60` | Seconds to cache model-detection results. |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR`. |
 
-Example `.env`:
+## Current limits
 
-```env
-COMFY_ENDPOINTS=http://127.0.0.1:8188,http://127.0.0.1:8189
-PORT=7788
-OUTPUT_DIR=outputs
-```
-
----
-
-## Governing principle
-
-> **Keep it simple.** Simple-Comfort exists to make one thing effortless:
-> generating a good 30-second clip locally. Every feature earns its place by
-> serving that goal — no accounts, no cloud, no ceremony.
-
----
+- **FramePack is I2V-only** — the UI disables t2v for it; the sampler's start
+  image is required.
+- **LTX 2.5 two-stage wants VRAM headroom** — it decodes at 2x resolution. On
+  a 24 GB card, close other VRAM consumers or use `draft` (single-stage).
+- **Unload resident model servers (e.g. LM Studio) before rendering** — these
+  engines need most of a 24 GB card each.
+- **Custom workflows whose defaults reference missing models fail ComfyUI
+  validation at queue time** — the job error names the offending node; pick an
+  installed file in the form's dropdown.
+- **LTX 2.5 ignores steps/guidance overrides** — the distilled sigma schedule
+  fixes them; effective values are reported truthfully in job metadata.
 
 ## License
 

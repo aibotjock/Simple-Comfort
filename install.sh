@@ -18,7 +18,7 @@
 #  Requirements:
 #    - Python 3.10 or later
 #    - git
-#    - ComfyUI already installed (with LTX-2.3, Wan 2.2, or FramePack models)
+#    - ComfyUI already installed (with LTX 2.5, Wan 2.2, or FramePack models)
 #
 #  This script does NOT start ComfyUI or modify your ComfyUI installation.
 # =============================================================================

@@ -1,5 +1,10 @@
 # Build Prompt — Simple-Comfort
 
+> **Historical document (2026-08-31).** This was the founding spec for v1.0.
+> The engine registry is now **LTX 2.5 / Wan 2.2 / FramePack** (LTX-2.3 retired),
+> and the product grew avatar/voice/B-roll/sequence/export panels per user
+> direction. See `README.md` for the product as it ships today.
+
 You are a senior Python engineer, ComfyUI integration engineer, and local generative-video systems architect. Build a production-ready but deliberately simple local WebUI named **Simple-Comfort**.
 
 The governing principle is: **simplicity is superior to feature count**. Do not recreate ComfyUI. Do not expose a node graph. Do not add unrelated tools. Hide model-specific workflow complexity behind a minimal interface.
