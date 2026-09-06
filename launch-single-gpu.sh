@@ -38,7 +38,7 @@ find_comfyui() {
         echo "$COMFYUI_PATH"
         return 0
     fi
-    for cand in "$HOME/ComfyUI" "$HOME/comfyui" "/opt/ComfyUI" "$HOME/AI/ComfyUI"; do
+    for cand in "/data/comfyui" "$HOME/ComfyUI" "$HOME/comfyui" "/opt/ComfyUI" "$HOME/AI/ComfyUI"; do
         if [ -f "$cand/main.py" ]; then
             echo "$cand"
             return 0
@@ -50,7 +50,7 @@ find_comfyui() {
 COMFY_DIR="$(find_comfyui)"
 if [ -z "$COMFY_DIR" ]; then
     echo "[single-gpu] ERROR: Could not find ComfyUI." >&2
-    echo "  Searched: \$COMFYUI_PATH, ~/ComfyUI, ~/comfyui, /opt/ComfyUI, ~/AI/ComfyUI" >&2
+    echo "  Searched: \$COMFYUI_PATH, /data/comfyui, ~/ComfyUI, ~/comfyui, /opt/ComfyUI, ~/AI/ComfyUI" >&2
     echo "  Fix: install ComfyUI, or set COMFYUI_PATH=/path/to/ComfyUI and re-run." >&2
     exit 1
 fi
@@ -63,9 +63,15 @@ if [ -d "$APP_DIR/venv" ]; then
     echo "[single-gpu] Activated virtual environment: $APP_DIR/venv"
 fi
 
-# --- Pick a python ---------------------------------------------------------
+# --- Pick pythons -----------------------------------------------------------
+# The web app runs on the app venv (activated above) or system python.
 PYTHON=python3
 command -v "$PYTHON" >/dev/null 2>&1 || PYTHON=python
+# ComfyUI must run on ITS OWN venv (torch/CUDA live there), never the app's —
+# fall back to the app/system python only if ComfyUI has no venv of its own.
+COMFY_PY="$COMFY_DIR/.venv/bin/python"
+[ -x "$COMFY_PY" ] || COMFY_PY="$PYTHON"
+echo "[single-gpu] ComfyUI python: $COMFY_PY"
 
 wait_for() {
     local url="$1" name="$2" i
@@ -82,7 +88,7 @@ wait_for() {
 
 # --- Launch ComfyUI instance 0 (GPU 0, port 8188) --------------------------
 echo "[single-gpu] Starting ComfyUI on GPU 0 (port $PORT0)..."
-( cd "$COMFY_DIR" && CUDA_VISIBLE_DEVICES=0 "$PYTHON" main.py --port "$PORT0" --listen "$HOST" ) \
+( cd "$COMFY_DIR" && CUDA_VISIBLE_DEVICES=0 "$COMFY_PY" main.py --port "$PORT0" --listen "$HOST" ) \
     > "$APP_DIR/comfyui-gpu0.log" 2>&1 &
 COMFY0_PID=$!
 

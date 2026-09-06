@@ -67,7 +67,7 @@ find_comfyui() {
         echo "$COMFYUI_PATH"
         return 0
     fi
-    for cand in "$HOME/ComfyUI" "$HOME/comfyui" "/opt/ComfyUI" "$HOME/AI/ComfyUI"; do
+    for cand in "/data/comfyui" "$HOME/ComfyUI" "$HOME/comfyui" "/opt/ComfyUI" "$HOME/AI/ComfyUI"; do
         if [ -f "$cand/main.py" ]; then
             echo "$cand"
             return 0
@@ -81,7 +81,7 @@ if [ "$GPU0_RUNNING" = false ] || [ "$GPU1_RUNNING" = false ]; then
     COMFY_DIR="$(find_comfyui)"
     if [ -z "$COMFY_DIR" ]; then
         echo "[dual-gpu] ERROR: Could not find ComfyUI (needed to start a missing instance)." >&2
-        echo "  Searched: \$COMFYUI_PATH, ~/ComfyUI, ~/comfyui, /opt/ComfyUI, ~/AI/ComfyUI" >&2
+        echo "  Searched: \$COMFYUI_PATH, /data/comfyui, ~/ComfyUI, ~/comfyui, /opt/ComfyUI, ~/AI/ComfyUI" >&2
         echo "  Fix: install ComfyUI, or set COMFYUI_PATH=/path/to/ComfyUI and re-run." >&2
         exit 1
     fi
@@ -97,9 +97,15 @@ if [ -d "$APP_DIR/venv" ]; then
     echo "[dual-gpu] Activated virtual environment: $APP_DIR/venv"
 fi
 
-# --- Pick a python ---------------------------------------------------------
+# --- Pick pythons -----------------------------------------------------------
+# The web app runs on the app venv (activated above) or system python.
 PYTHON=python3
 command -v "$PYTHON" >/dev/null 2>&1 || PYTHON=python
+# ComfyUI must run on ITS OWN venv (torch/CUDA live there), never the app's —
+# fall back to the app/system python only if ComfyUI has no venv of its own.
+COMFY_PY="$COMFY_DIR/.venv/bin/python"
+[ -x "$COMFY_PY" ] || COMFY_PY="$PYTHON"
+echo "[dual-gpu] ComfyUI python: $COMFY_PY"
 
 wait_for() {
     local url="$1" name="$2" i
@@ -114,12 +120,28 @@ wait_for() {
     return 1
 }
 
+# --- Verify CUDA before starting anything -----------------------------------
+# Without a driver ComfyUI comes up CPU-only and every job crawls — fail fast
+# with the fix instead. (Skipped when both instances are already running.)
+if [ "$GPU0_RUNNING" = false ] || [ "$GPU1_RUNNING" = false ]; then
+    CUDA_DEVICES="$(CUDA_VISIBLE_DEVICES=0,1 "$COMFY_PY" \
+        -c 'import torch; print(torch.cuda.device_count())' 2>/dev/null || echo 0)"
+    if [ "$CUDA_DEVICES" = "0" ]; then
+        echo "[dual-gpu] ERROR: no CUDA devices visible — NVIDIA driver missing or broken." >&2
+        echo "  Check: nvidia-smi   Fix: sudo apt install -y nvidia-driver-595-open  (then reboot)" >&2
+        exit 1
+    fi
+    if [ "$CUDA_DEVICES" != "2" ]; then
+        echo "[dual-gpu] WARNING: expected 2 CUDA devices, found $CUDA_DEVICES — the second instance may fail." >&2
+    fi
+fi
+
 # --- Launch ComfyUI instance 0 (GPU 0, port 8188) --------------------------
 if [ "$GPU0_RUNNING" = true ]; then
     echo "[dual-gpu] Reusing existing ComfyUI on GPU 0 (port $PORT0)."
 else
     echo "[dual-gpu] Starting ComfyUI on GPU 0 (port $PORT0)..."
-    ( cd "$COMFY_DIR" && CUDA_VISIBLE_DEVICES=0 "$PYTHON" main.py --port "$PORT0" --listen "$HOST" ) \
+    ( cd "$COMFY_DIR" && CUDA_VISIBLE_DEVICES=0 "$COMFY_PY" main.py --port "$PORT0" --listen "$HOST" ) \
         > "$APP_DIR/comfyui-gpu0.log" 2>&1 &
     COMFY0_PID=$!
 fi
@@ -129,7 +151,7 @@ if [ "$GPU1_RUNNING" = true ]; then
     echo "[dual-gpu] Reusing existing ComfyUI on GPU 1 (port $PORT1)."
 else
     echo "[dual-gpu] Starting ComfyUI on GPU 1 (port $PORT1)..."
-    ( cd "$COMFY_DIR" && CUDA_VISIBLE_DEVICES=1 "$PYTHON" main.py --port "$PORT1" --listen "$HOST" ) \
+    ( cd "$COMFY_DIR" && CUDA_VISIBLE_DEVICES=1 "$COMFY_PY" main.py --port "$PORT1" --listen "$HOST" ) \
         > "$APP_DIR/comfyui-gpu1.log" 2>&1 &
     COMFY1_PID=$!
 fi
