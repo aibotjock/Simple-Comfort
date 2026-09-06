@@ -1,0 +1,43 @@
+# =============================================================================
+#  GPU / CUDA packages — for the ComfyUI (and optional LLM) environment.
+#
+#  DO NOT install these into Simple-Comfort's own venv. The app is a thin
+#  FastAPI front-end and never imports torch — its runtime deps live in
+#  requirements.txt. These packages belong in the ENVIRONMENT THAT ACTUALLY
+#  RUNS THE MODELS: ComfyUI's venv (and, if you use it, an LLM runtime).
+#
+#  Install into the ComfyUI venv, matching your driver's CUDA version
+#  (see `nvidia-smi`). Example for CUDA 12.4 wheels:
+#
+#     /path/to/ComfyUI/.venv/bin/python -m pip install \
+#         -r requirements-gpu.txt \
+#         --extra-index-url https://download.pytorch.org/whl/cu124
+#
+#  For a different CUDA runtime swap cu124 for cu121 / cu126 / etc.
+#  See GPU_SETUP.md for full instructions and the dual RTX 3090 even-split.
+# =============================================================================
+
+# --- Core CUDA torch stack (ComfyUI) ----------------------------------------
+# Pulls the CUDA build when the cu124 extra-index-url above is supplied.
+torch>=2.4.0
+torchvision>=0.19.0
+torchaudio>=2.4.0
+
+# --- Optional: local LLM inference with CUDA (e.g. GGUF models) --------------
+# llama-cpp-python must be built/installed with CUDA to offload layers to the
+# GPU. Either install a prebuilt CUDA wheel from the project's CUDA index, or
+# build from source with GPU support:
+#
+#   CMAKE_ARGS="-DGGML_CUDA=on" \
+#       pip install --force-reinstall --no-binary llama-cpp-python llama-cpp-python
+#
+# Then set n_gpu_layers=-1 (offload all layers) and, for two RTX 3090s, a
+# tensor_split of [0.5, 0.5] for an even split across both cards.
+llama-cpp-python>=0.3.0
+
+# --- Optional: HuggingFace multi-GPU (transformers/accelerate) --------------
+# For loading HF models split evenly across both GPUs use device_map="auto"
+# together with max_memory={0: "23GiB", 1: "23GiB"} (leave ~1 GB headroom per
+# 24 GB card). accelerate provides the balanced placement.
+transformers>=4.44.0
+accelerate>=0.33.0
