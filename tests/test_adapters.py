@@ -221,3 +221,61 @@ def test_framepack_requires_reference_image():
     section = adapter.get_section_strategy(params)[0]
     with pytest.raises(ValueError, match="reference image"):
         adapter.map_parameters(params, section, None)
+
+
+# ---------------------------------------------------------------------- #
+# Target duration (20s / 30s clips)
+# ---------------------------------------------------------------------- #
+def test_ltx25_default_30s_sections_unchanged():
+    sections = LTX25Adapter().get_section_strategy(typical_params())
+    assert len(sections) == 5
+    total = sum(s.approx_seconds for s in sections)
+    assert 29.5 <= total <= 30.5
+
+
+def test_ltx25_20s_target_distributes_exactly():
+    sections = LTX25Adapter().get_section_strategy(
+        typical_params(target_seconds=20))
+    assert len(sections) == 3
+    total = sum(s.approx_seconds for s in sections)
+    assert 19.5 <= total <= 20.5, f"20s target produced {total:.2f}s"
+    # LTX frame counts must stay 8k+1 friendly per section.
+    assert all((s.frames - 1) % 8 == 0 for s in sections)
+
+
+def test_ltx25_explicit_segment_length_respected():
+    # With an explicit segment length the adapter uses it as-is
+    # (approximate totals are the documented trade-off).
+    sections = LTX25Adapter().get_section_strategy(
+        typical_params(target_seconds=20, segment_length=6.0))
+    assert len(sections) == 3
+    # frames snap to 8k+1 (145 @ 24fps -> 6.04s), not exact 6.0
+    assert all(5.9 <= s.approx_seconds <= 6.1 for s in sections)
+
+
+def test_wan22_20s_target_four_exact_sections():
+    sections = Wan22Adapter().get_section_strategy(
+        typical_params(target_seconds=20))
+    assert len(sections) == 4
+    total = sum(s.approx_seconds for s in sections)
+    assert 19.5 <= total <= 20.5
+    assert all((s.frames - 1) % 4 == 0 for s in sections)
+
+
+def test_framepack_20s_target_single_call():
+    sections = FramePackAdapter().get_section_strategy(
+        typical_params(mode="i2v", target_seconds=20))
+    assert len(sections) == 1
+    assert sections[0].approx_seconds == pytest.approx(20.0)
+
+
+def test_duration_section_memory_bound():
+    """Distributed sections never exceed ~1.5x the section-length bound."""
+    for dur, expect_sections in [(8, 1), (10, 2), (20, 3), (30, 5)]:
+        sections = LTX25Adapter().get_section_strategy(
+            typical_params(target_seconds=dur))
+        assert len(sections) == expect_sections, (dur, len(sections))
+        assert all(s.approx_seconds <= 6.0 * 1.5 + 0.1 for s in sections)
+    # 4s (the API minimum) is a single short section.
+    assert len(LTX25Adapter().get_section_strategy(
+        typical_params(target_seconds=4))) == 1

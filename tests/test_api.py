@@ -122,3 +122,20 @@ def test_custom_workflows_list_envelope(client):
     for record in body["workflows"]:
         assert record["slug"] and record["name"]
         assert "validated" in record
+
+
+def test_generate_duration_param_accepted_and_validated(client):
+    """duration parses to target_seconds; bad values 400 before ComfyUI is
+    consulted (workers are unreachable by construction in this suite)."""
+    # Valid duration passes request validation and reaches the worker
+    # stage, which is offline here -> 409, not 400.
+    r = client.post("/api/generate", data={
+        "prompt": "a quiet harbor at dawn", "model": "ltx25", "mode": "t2v",
+        "duration": "20",
+    })
+    assert r.status_code == 409, r.text
+    # Out-of-range duration is rejected outright.
+    r = client.post("/api/generate", data={
+        "prompt": "x", "model": "ltx25", "mode": "t2v", "duration": "3",
+    })
+    assert r.status_code == 400

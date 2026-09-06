@@ -399,6 +399,7 @@ async def api_generate(
     mode: str = Form(...),
     aspect_ratio: str = Form("16:9"),
     quality: str = Form("balanced"),
+    duration: Optional[str] = Form(None),
     lip_sync: str = Form("true"),
     seed: Optional[str] = Form(None),
     fps: Optional[str] = Form(None),
@@ -427,6 +428,12 @@ async def api_generate(
         raise HTTPException(status_code=400, detail=f"Unknown model '{model}'")
     if mode not in ("t2v", "i2v"):
         raise HTTPException(status_code=400, detail=f"Invalid mode '{mode}'")
+    target_seconds = _parse_float(duration)
+    if target_seconds is not None and not 4 <= target_seconds <= 120:
+        raise HTTPException(
+            status_code=400,
+            detail="duration must be between 4 and 120 seconds",
+        )
 
     adapter = state.adapters[model]
 
@@ -514,6 +521,7 @@ async def api_generate(
         width=_parse_int(width),
         height=_parse_int(height),
         segment_length=_parse_float(segment_length),
+        target_seconds=target_seconds,
         motion_strength=_parse_float(motion_strength),
         reference_image=reference_image_path,
         quality_params=quality_params,
@@ -526,6 +534,7 @@ async def api_generate(
         "voice_id": voice_id or None,
         "generation_settings": {
             "quality": quality,
+            "target_seconds": target_seconds,
             "worker_index": _parse_int(worker_index),
             "quality_params": quality_params,
         },

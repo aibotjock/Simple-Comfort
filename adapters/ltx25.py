@@ -90,7 +90,17 @@ class LTX25Adapter(ModelAdapter):
         target = params.effective_target_seconds(self.TARGET_SECONDS)
         section_seconds = params.segment_length or self.SECTION_SECONDS
         num_sections = max(1, round(target / section_seconds))
-        frames = _ltx_frame_count(section_seconds, fps)
+        # Without an explicit segment length, distribute the target exactly
+        # across sections — otherwise e.g. a 20s target yields 3 x 6s =
+        # 18.2s. Sections stay within ~1.5x SECTION_SECONDS so the peak
+        # memory bound of the section length still holds. With an explicit
+        # segment length, respect it as given.
+        per_section = section_seconds
+        if not params.segment_length:
+            while target / num_sections > section_seconds * 1.5:
+                num_sections += 1
+            per_section = target / num_sections
+        frames = _ltx_frame_count(per_section, fps)
         sections: List[SectionConfig] = []
         for i in range(num_sections):
             first = i == 0

@@ -166,7 +166,15 @@ class Wan22Adapter(ModelAdapter):
         target = params.effective_target_seconds(self.TARGET_SECONDS)
         num_sections = max(1, round(target / section_seconds))
         # Frames per section at the native fps, kept 4n+1 friendly.
-        frames = _wan_frame_count(section_seconds, fps)
+        # Without an explicit segment length, distribute the target exactly
+        # across sections so the total lands on the requested duration,
+        # keeping each section within ~1.5x SECTION_SECONDS (memory bound).
+        per_section = section_seconds
+        if not params.segment_length:
+            while target / num_sections > section_seconds * 1.5:
+                num_sections += 1
+            per_section = target / num_sections
+        frames = _wan_frame_count(per_section, fps)
 
         sections: List[SectionConfig] = []
         for i in range(num_sections):

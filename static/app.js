@@ -7,6 +7,7 @@ const state = {
   continuity: "new",
   aspect_ratio: "16:9",
   quality: "balanced",
+  duration: 30,
   models: {},          // key -> status object
   customWorkflows: {}, // slug -> record (with schema)
   activeWorkflow: null,
@@ -32,6 +33,7 @@ document.addEventListener("DOMContentLoaded", () => {
   wireProQuality();
   wirePromptCounter();
   wireLipsyncState();
+  updateGenerateLabel();
   wireAnnealToggle();
   wireButtons();
   wirePanels();
@@ -86,6 +88,9 @@ function onPillChange(name, value) {
   } else if (name === "quality") {
     state.quality = value;
     applyQualityDefaults(value);
+  } else if (name === "duration") {
+    state.duration = parseInt(value, 10) || 30;
+    updateGenerateLabel();
   }
 }
 
@@ -402,6 +407,8 @@ function applyContinueFrom(clip) {
   if (md.model_key) { selectPill("model-group", md.model_key); state.model = md.model_key; const b = $("#model-badge"); if (b) b.textContent = MODEL_LABELS[md.model_key] || md.model_key; }
   if (md.aspect_ratio) { selectPill("aspect-group", md.aspect_ratio); state.aspect_ratio = md.aspect_ratio; }
   if (md.quality) { selectPill("quality-group", md.quality); state.quality = md.quality; }
+  const dur = (md.generation_settings && md.generation_settings.target_seconds) || md.target_seconds;
+  if (dur) { selectPill("duration-group", String(Math.round(dur))); state.duration = Math.round(dur); updateGenerateLabel(); }
   if (typeof md.lip_sync === "boolean") { $("#lipsync").checked = md.lip_sync; const ls = $("#lipsync-state"); if (ls) ls.textContent = md.lip_sync ? "ON" : "OFF"; }
   if (md.fps) $("#fps").value = String(md.fps);
   applyModelConstraints();
@@ -470,6 +477,7 @@ async function generate() {
   fd.append("mode", state.mode);
   fd.append("aspect_ratio", state.aspect_ratio);
   fd.append("quality", state.quality);
+  fd.append("duration", String(state.duration));
   fd.append("lip_sync", $("#lipsync").checked ? "true" : "false");
   const seed = $("#seed").value;
   if (seed) fd.append("seed", seed);
@@ -531,11 +539,16 @@ async function generate() {
   }
 }
 
+function updateGenerateLabel() {
+  const btn = $("#generate-btn");
+  if (btn) btn.textContent = `GENERATE ${state.duration}s CLIP`;
+}
+
 function resetGenerateBtn() {
   const btn = $("#generate-btn");
   btn.disabled = false;
   btn.classList.remove("generating");
-  btn.textContent = "GENERATE 30s CLIP";
+  updateGenerateLabel();
   const wfBtn = $("#wf-generate");
   if (wfBtn) {
     wfBtn.disabled = false;
