@@ -74,6 +74,23 @@ class ComfyUIClient:
             log.debug("Endpoint %s not alive: %s", self.base_url, exc)
             return False
 
+    async def system_stats(self) -> Optional[Dict[str, Any]]:
+        """Return the /system_stats payload (GPU device report), or None
+        when the endpoint is unreachable."""
+        try:
+            session = await self._get_session()
+            async with session.get(
+                f"{self.base_url}/system_stats",
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                if resp.status != 200:
+                    return None
+                return await resp.json()
+        except Exception as exc:  # noqa: BLE001
+            log.debug("system_stats fetch failed for %s: %s",
+                      self.base_url, exc)
+            return None
+
     async def get_object_info(self) -> Dict[str, Any]:
         """Return /object_info (all available node classes)."""
         session = await self._get_session()

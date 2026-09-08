@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<title>Simple-Comfort — Gauntlet Progress</title>
+<style>
+  body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 2rem auto; max-width: 60rem; padding: 0 1rem; color: #1a1a1a; }
+  h1 { font-size: 1.4rem; }
+  .entry { border: 1px solid #ddd; border-radius: 8px; padding: 1rem 1.25rem; margin: 1rem 0; }
+  .date { color: #666; font-size: 0.85rem; }
+  code { background: #f4f4f4; padding: 0.1em 0.35em; border-radius: 4px; font-size: 0.9em; }
+  .pass { color: #0a7d24; font-weight: 600; }
+  .fail { color: #b3261e; font-weight: 600; }
+  ul { margin: 0.5rem 0; padding-left: 1.2rem; }
+</style>
+</head>
+<body>
+<h1>Simple-Comfort gauntlet — progress log</h1>
+
+<div class="entry">
+  <p><b>Round 1 — AAN LTX-2.5 candidate pack ingested as the LTX-2.5 backend</b><br/>
+  <span class="date">2026-09-07</span></p>
+  <ul>
+    <li>Pack copied byte-faithful to <code>workflows/aan_ltx25/</code> — all 10 SHA256s verified against the pack's <code>SHA256_MANIFEST.json</code>; README / MODEL_REQUIREMENTS / BUILD_STANDARD_EXCERPT / TEST_REPORT travel with it.</li>
+    <li><code>adapters/ltx25.py</code> rewritten around the pack's COMMON INTERFACE: quality presets map to profiles (draft&rarr;08 FAST_PREVIEW, balanced/quality&rarr;09 TWO_STAGE), any of the 10 forceable via <code>quality_params["ltx_profile"]</code> (10 pixel-spatial is opt-in — pack flags it as generative enhancement). Mode is an in-graph toggle; section strategy (6s, 8k+1 frames) unchanged and matches the pack's own frame formula.</li>
+    <li>Offline UI&rarr;API conversion via a pinned, sanitized node-spec fixture (<code>pack_object_info.json</code>, 39 types from live ComfyUI 0.34.0; regenerable with <code>tools/refresh_pack_fixture.py</code>). The pack's hand-authored widget arrays are full-spec-order — a normalizer drops wired slots first, fixing real landmines (batch_size swallowing width, a float landing on the boolean bypass, enhancer widgets shifted).</li>
+    <li>Two genuine <code>convert_ui_to_api</code> fixes for ComfyUI &ge; 0.34 schemas: string-typed <code>"COMBO"</code> inputs now consume widgets (LoadAudio / LatentUpscaleModelLoader were silently dropped), and dotted inputs (<code>values.a</code> autogrow, <code>sampling_mode.seed</code> dynamic-combo nested) emit under their full names. Also fixes bar-workflow conversions (SaveWEBM had <code>fps:"vp9"</code> before).</li>
+    <li>Unused upload slots get deterministic placeholders (<code>sc-blank.png</code>, <code>sc-silence.wav</code>) staged like reference images — ComfyUI combo-validates even lazily-skipped nodes.</li>
+    <li>Legacy <code>ltx25_*.json</code> graphs archived to <code>gauntlet/legacy/ltx25/</code> with a succession note; nothing discovers them anymore.</li>
+    <li><code>tools/check_models.py</code> + <code>tools/MODELS.md</code> + README updated: UI-format scanning, <code>aan_ltx25</code> prefix, pixel-spatial IC-LoRA row. <span class="pass">3/3 engines READY, 22/22 files present.</span></li>
+  </ul>
+  <p><b>Evidence</b> (live ComfyUI 0.34.0 on 127.0.0.1:8188, validate-and-discard — queued then immediately deleted, nothing rendered):</p>
+  <ul>
+    <li><span class="pass">23/23</span> live load-gates PASS: all 10 profiles &times; t2v/i2v + the 3 quality presets (<code>validate_templates.py</code>: 26/26 backend cases incl. wan22/framepack).</li>
+    <li><span class="pass">81 passed</span> hermetic pytest (was 49; +32 pack/converter tests, no network).</li>
+    <li>ModelDetector against the live worker: <code>ltx25 available=True, t2v=True, i2v=True</code> — the WebUI LTX 2.5 pill lights up on the pack's 39-node REQUIRED_NODES.</li>
+  </ul>
+  <p><b>Honest limits / failures</b>:</p>
+  <ul>
+    <li>Render columns of the pack's TEST_REPORT remain NOT TESTED — this box has no GPU driver; the gate met is graph-load validation only.</li>
+    <li><code>validate_templates.py</code> still reports 2 pre-existing FAILs on <em>bar reference</em> imports (not the pack): lightx2v_t2v queue-check wants fp16 experts + Seko LoRAs that are not installed; LTX-2.5_T2V_I2V bar file uses subgraphs, rejected by design.</li>
+    <li>During probe cleanup I deleted two pre-existing staged copies in <code>/data/comfyui/input</code> (<code>sc-5c854f7320da.png</code>, <code>sc-d4d441399033.png</code>) by mistake — restored byte-identical from their originals (AriyannaAI.png / example.png); my own probe files removed; queue left empty.</li>
+  </ul>
+</div>
+
+</body>
+</html>

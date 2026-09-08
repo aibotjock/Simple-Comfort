@@ -291,6 +291,25 @@ function renderGpuChips(data) {
   const wrap = $("#gpu-chips");
   if (!wrap) return;
   const workers = Array.isArray(data.workers) ? data.workers : [];
+  // Split-GPU mode: one ComfyUI instance drives every card and every
+  // generation is divided across them — a single chip says so.
+  if (data.split_gpus && data.split_gpus.devices > 1) {
+    wrap.hidden = false;
+    wrap.innerHTML = "";
+    const chip = document.createElement("span");
+    chip.className = "gpu-chip";
+    chip.title = "One ComfyUI driving " + data.split_gpus.devices +
+      " GPUs — every generation splits its work across them";
+    const dot = document.createElement("span");
+    dot.className = "dot " + (workers.some((w) => w.alive) ? "dot-green" : "dot-red");
+    chip.appendChild(dot);
+    const name = document.createElement("span");
+    name.className = "gpu-chip-name";
+    name.textContent = data.split_gpus.devices + "\u00d7GPU split";
+    chip.appendChild(name);
+    wrap.appendChild(chip);
+    return;
+  }
   // Only show per-GPU chips for multi-GPU setups; keep single connection
   // indicator for single-endpoint configs.
   if (!data.multi_gpu || workers.length <= 1) {
@@ -484,10 +503,15 @@ async function generate() {
   fd.append("fps", $("#fps").value);
   fd.append("steps", $("#steps").value);
   fd.append("guidance", $("#guidance").value);
+  // Resolution presets are short-side based (720p / 1080p); the aspect
+  // pills decide orientation: 16:9 -> 1280x720, 9:16 -> 720x1280, 1:1 -> 720x720.
   const resolution = $("#resolution").value;
   if (resolution) {
-    const [w, h] = resolution.split("x");
-    fd.append("width", w); fd.append("height", h);
+    const short = parseInt(resolution, 10);
+    let w = short, h = short;
+    if (state.aspect_ratio === "16:9") { w = Math.round(short * 16 / 9); h = short; }
+    else if (state.aspect_ratio === "9:16") { w = short; h = Math.round(short * 16 / 9); }
+    fd.append("width", String(w)); fd.append("height", String(h));
   }
   fd.append("segment_length", $("#segment").value);
   fd.append("motion_strength", $("#motion").value);

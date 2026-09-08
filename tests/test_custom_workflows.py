@@ -311,3 +311,92 @@ def test_registry_survives_unreadable_manifest(tmp_path: Path,
     registry = CustomWorkflowRegistry({})
     registry.load_all()
     assert registry.records == {}
+
+
+# ---------------------------------------------------------------------- #
+# ComfyUI >= 0.34 schema shapes (string "COMBO", dotted dynamic inputs)
+# ---------------------------------------------------------------------- #
+NEW_SCHEMA_OBJECT_INFO: Dict[str, Any] = {
+    # New-style string-typed combo (options live in the config dict).
+    "LoadAudio": {"input": {"required": {
+        "audio": ["COMBO", {"options": ["narration.mp3", "music.wav"]}],
+    }}},
+    "PrimitiveFloat": {"input": {"required": {
+        "value": ["FLOAT", {"default": 1.0}],
+    }}},
+    "PrimitiveInt": {"input": {"required": {
+        "value": ["INT", {"default": 0,
+                          "control_after_generate": "fixed"}],
+    }}},
+    # Autogrow numeric inputs arrive as dotted slot names ("values.a").
+    "ComfyMathExpression": {"input": {"required": {
+        "expression": ["STRING", {"default": "a + b", "multiline": True}],
+        "values": ["COMFY_AUTOGROW_V3",
+                   {"template": {"input": {"required": {
+                       "value": ["FLOAT,INT,BOOLEAN", {}],
+                   }}}}],
+    }}},
+    # Dynamic combo with nested inputs (nested slots named "mode.seed"...)
+    "Enhancer": {"input": {"required": {
+        "prompt": ["STRING", {"multiline": True}],
+        "mode": ["COMFY_DYNAMICCOMBO_V3", {"options": [
+            {"key": "on", "inputs": {"required": {
+                "temperature": ["FLOAT", {"default": 0.7}],
+                "seed": ["INT", {"default": 0}],
+            }, "optional": {
+                "presence_penalty": ["FLOAT", {"default": 0.0}],
+            }}},
+            {"key": "off", "inputs": {}},
+        ]}],
+    }}},
+}
+
+
+def _ui_node(nid, ctype, widgets, inputs=(), title=""):
+    return {"id": nid, "type": ctype, "title": title,
+            "widgets_values": list(widgets),
+            "inputs": [{"name": n, "link": lk} for n, lk in inputs],
+            "outputs": [{"name": "OUT", "links": []}]}
+
+
+def test_string_typed_combo_consumes_widget_value():
+    ui = {"nodes": [_ui_node(1, "LoadAudio", ["narration.mp3"])],
+          "links": []}
+    api = convert_ui_to_api(ui, NEW_SCHEMA_OBJECT_INFO)
+    assert api["1"]["inputs"] == {"audio": "narration.mp3"}
+
+
+def test_combo_without_widget_value_is_omitted_not_none():
+    # A short widget array must not inject None into a combo input
+    # (validation would report "None not in list").
+    ui = {"nodes": [_ui_node(1, "LoadAudio", [])], "links": []}
+    api = convert_ui_to_api(ui, NEW_SCHEMA_OBJECT_INFO)
+    assert "audio" not in api["1"]["inputs"]
+
+
+def test_autogrow_dotted_inputs_are_emitted_under_full_names():
+    # values.a wired to a Primitive, values.b left unconnected (widget).
+    ui = {"nodes": [
+        _ui_node(1, "ComfyMathExpression", ["a + b"],
+                 inputs=[("values.a", 7)]),
+        _ui_node(2, "PrimitiveFloat", [24.0]),
+    ], "links": [[7, 2, 0, 1, 0, "FLOAT,INT,BOOLEAN"]]}
+    api = convert_ui_to_api(ui, NEW_SCHEMA_OBJECT_INFO)
+    assert api["1"]["inputs"]["expression"] == "a + b"
+    assert api["1"]["inputs"]["values.a"] == 24.0  # inlined Primitive value
+
+
+def test_dynamic_combo_nested_inputs_use_dotted_names():
+    # Editor-canonical widget array: no slot for the wired "mode.seed".
+    ui = {"nodes": [
+        _ui_node(1, "Enhancer", ["hello", "on", 0.5, 0.25],
+                 inputs=[("mode.seed", 7)]),
+        _ui_node(2, "PrimitiveInt", [1234]),
+    ], "links": [[7, 2, 0, 1, 3, "INT"]]}
+    api = convert_ui_to_api(ui, NEW_SCHEMA_OBJECT_INFO)
+    inp = api["1"]["inputs"]
+    assert inp["prompt"] == "hello"
+    assert inp["mode"] == "on"
+    assert inp["mode.temperature"] == 0.5
+    assert inp["mode.seed"] == 1234          # wired Primitive, not a widget
+    assert inp["mode.presence_penalty"] == 0.25  # optional nested input

@@ -8,15 +8,19 @@ missing, and the exact command that would install each missing file.
 
 The REQUIRED manifest is derived from what the app actually loads:
 
-* ``workflows/*.json`` — every filename fed to a loader node
+* ``workflows/**/*.json`` — every filename fed to a loader node
   (``UNETLoader.unet_name``, ``CheckpointLoaderSimple.ckpt_name``,
   ``CLIPLoader.clip_name``, ``DualCLIPLoader.clip_name1/2``,
   ``VAELoader.vae_name``, ``LoraLoader*/lora_name``,
   ``CLIPVisionLoader.clip_name``, ``LatentUpscaleModelLoader.model_name``,
-  ``LoadFramePackModel.model``). Template placeholders (``{{...}}``) are
-  skipped. Only workflows whose filename prefix maps to an engine
-  registered in ``adapters/__init__.py:build_adapters`` are required —
-  unmapped workflows are reported as skipped, not required.
+  ``LoadFramePackModel.model``, ``LTXICLoRALoaderModelOnly.lora_name``).
+  Both graph shapes are scanned: API-format prompts read the named
+  loader inputs directly; editor-format graphs (the AAN LTX-2.5 pack)
+  scan the loader nodes' widget values for model-file extensions, since
+  widget slots there are positional, not named. Template placeholders
+  (``{{...}}``) are skipped. Only workflows whose filename prefix maps
+  to an engine registered in ``adapters/__init__.py:build_adapters`` are
+  required — unmapped workflows are reported as skipped, not required.
 * ``adapters/<engine>.py`` — any quoted ``*.safetensors`` / ``*.ckpt``
   filename hardcoded in the adapter itself (directory resolved by looking
   the name up in the known model folders).
@@ -85,9 +89,12 @@ ENDPOINTS = [e.strip().rstrip("/") for e in
              if e.strip()]
 
 # Engines mirror adapters/__init__.py:build_adapters() — a workflow whose
-# filename starts with the prefix belongs to that engine.
+# filename starts with the prefix (case-insensitive) belongs to that
+# engine. The LTX-2.5 backend is the AAN candidate pack under
+# workflows/aan_ltx25/.
 ENGINES: List[Tuple[str, str, str]] = [
     # (workflow prefix, model key, display name)
+    ("aan_ltx25", "ltx25", "LTX 2.5"),
     ("ltx25", "ltx25", "LTX 2.5"),
     ("wan22", "wan22", "Wan 2.2"),
     ("framepack", "framepack", "FramePack"),
@@ -108,6 +115,7 @@ LOADER_INPUTS: Dict[str, Dict[str, str]] = {
     "CLIPVisionLoader": {"clip_name": "clip_vision"},
     "LatentUpscaleModelLoader": {"model_name": "latent_upscale_models"},
     "LoadFramePackModel": {"model": "diffusion_models"},
+    "LTXICLoRALoaderModelOnly": {"lora_name": "loras"},
 }
 
 # Legacy folder aliases ComfyUI still serves (same mapping as
@@ -138,6 +146,8 @@ SOURCES: Dict[str, Tuple[str, Optional[str], bool]] = {
     "ltx-2.5-audio-vae-bf16.safetensors":
         ("Lightricks/LTX-2.5", None, True),
     "ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors":
+        ("Lightricks/LTX-2.5", None, True),
+    "ltx-2.5-22b-ic-lora-pixel-spatial-upscaler-x2-1.0.safetensors":
         ("Lightricks/LTX-2.5", None, True),
     # Wan 2.2 — ComfyUI org repackaged split_files distribution.
     "wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors":
@@ -274,26 +284,53 @@ class EngineReport:
 # Derivation: workflows + adapters -> required files
 # --------------------------------------------------------------------------
 
+def _ui_loader_refs(graph: dict) -> List[dict]:
+    """Loader pseudo-nodes from an editor-format graph.
+
+    Widget slots are positional in editor format, so loader inputs cannot
+    be read by name; instead every widget value that looks like a model
+    file becomes a pseudo ``{class_type, inputs: {<first input key>: v}}``
+    entry — a loader node only ever references files of its own kind, so
+    the class type alone fixes the folder.
+    """
+    pseudo: List[dict] = []
+    for node in graph.get("nodes") or []:
+        ctype = node.get("type", "")
+        if ctype not in LOADER_INPUTS:
+            continue
+        for value in node.get("widgets_values") or []:
+            if isinstance(value, str) \
+                    and value.endswith((".safetensors", ".ckpt", ".pt", ".bin")):
+                first_key = next(iter(LOADER_INPUTS[ctype]))
+                pseudo.append({"class_type": ctype,
+                               "inputs": {first_key: value}})
+    return pseudo
+
+
 def derive_required() -> Tuple[List[EngineReport], List[str]]:
-    """Scan workflows/*.json and adapters/*.py for loader-referenced files."""
+    """Scan workflows/**/*.json and adapters/*.py for loader-referenced
+    files."""
     engines = {key: EngineReport(display=disp, key=key)
                for _prefix, key, disp in ENGINES}
     prefix_to_key = {prefix: key for prefix, key, _disp in ENGINES}
     unmapped: List[str] = []
 
-    for wf in sorted((REPO_ROOT / "workflows").glob("*.json")):
-        stem = wf.stem
+    for wf in sorted((REPO_ROOT / "workflows").rglob("*.json")):
+        stem = wf.stem.lower()
         key = next((k for prefix, k in prefix_to_key.items()
                     if stem.startswith(prefix)), None)
         if key is None:
-            unmapped.append(wf.name)
+            unmapped.append(str(wf.relative_to(REPO_ROOT / "workflows")))
             continue
         engines[key].workflows.append(wf.name)
         try:
             graph = json.loads(wf.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as exc:
             raise SystemExit(f"error: cannot parse {wf}: {exc}")
-        nodes = graph.values() if isinstance(graph, dict) else graph
+        if isinstance(graph, dict) and isinstance(graph.get("nodes"), list):
+            nodes = _ui_loader_refs(graph)
+        else:
+            nodes = graph.values() if isinstance(graph, dict) else graph
         for node in nodes:
             if not isinstance(node, dict):
                 continue
@@ -329,7 +366,13 @@ def derive_required() -> Tuple[List[EngineReport], List[str]]:
             else:
                 seen[rf.name] = rf
         engine.files = [seen[n] for n in sorted(seen, key=lambda n: seen[n].name)]
-    return [engines[key] for _p, key, _d in ENGINES], unmapped
+    # Several prefixes can map to one engine (aan_ltx25 + ltx25 -> ltx25):
+    # report each engine once, in first-seen order.
+    order: List[str] = []
+    for _p, key, _d in ENGINES:
+        if key not in order:
+            order.append(key)
+    return [engines[key] for key in order], unmapped
 
 
 # --------------------------------------------------------------------------

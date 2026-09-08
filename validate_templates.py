@@ -6,6 +6,7 @@ then interrupts so no GPU time is spent. Exits non-zero on any failure.
 """
 import asyncio
 import json
+import os
 import struct
 import sys
 import zlib
@@ -65,10 +66,15 @@ async def main():
     adapters = build_adapters()
 
     cases = []
-    # LTX 2.5 — 4 template variants (draft single-stage, balanced two-stage).
-    for quality, label in (("draft", "single"), ("balanced", "2stage")):
+    # LTX 2.5 — the AAN candidate pack: every profile in both modes, plus
+    # the plain quality presets (which map onto pack profiles).
+    from adapters.ltx25 import PROFILES
+    for profile in sorted(PROFILES):
         for mode in ("t2v", "i2v"):
-            cases.append((f"ltx25-{mode}-{label}", "ltx25", mode, quality))
+            cases.append((f"ltx25-{profile}-{mode}", "ltx25", mode,
+                          {"ltx_profile": profile}))
+    for quality in ("draft", "balanced", "quality"):
+        cases.append((f"ltx25-preset-{quality}", "ltx25", "t2v", quality))
     cases += [
         ("wan22-t2v", "wan22", "t2v", "balanced"),
         ("wan22-i2v", "wan22", "i2v", "balanced"),
@@ -77,7 +83,11 @@ async def main():
 
     results = []
     async with aiohttp.ClientSession() as session:
-        for label, key, mode, quality in cases:
+        for case in cases:
+            label, key, mode, quality = case
+            quality_params = {}
+            if isinstance(quality, dict):
+                quality_params, quality = quality, "balanced"
             adapter = adapters[key]
             params = GenerationParams(
                 prompt="a calm ocean at dawn, gentle waves",
@@ -87,6 +97,7 @@ async def main():
                 reference_image=REF if mode == "i2v" else None,
                 target_seconds=6,
                 segment_length=6.0,
+                quality_params=quality_params,
             )
             try:
                 sections = adapter.get_section_strategy(params)
@@ -94,6 +105,36 @@ async def main():
                 results.append(await validate(session, label, wf))
             except Exception as exc:  # noqa: BLE001
                 results.append((label, False, f"{type(exc).__name__}: {exc}"))
+
+        # Split-GPU variant of the production backend (launch-split-gpu.sh):
+        # the inserted MultiGPU_WorkUnits wrappers and the dual-CFG guider
+        # values must validate against the live server too. 720p portrait
+        # exercises the halved working grid.
+        os.environ["SC_SPLIT_GPUS"] = "1"
+        try:
+            for mode in ("t2v", "i2v"):
+                params = GenerationParams(
+                    prompt="a calm ocean at dawn, gentle waves",
+                    mode=mode,
+                    quality="balanced",
+                    lip_sync=False,
+                    width=720,
+                    height=1280,
+                    reference_image=REF if mode == "i2v" else None,
+                    target_seconds=6,
+                    segment_length=6.0,
+                )
+                try:
+                    adapter = adapters["ltx25"]
+                    sections = adapter.get_section_strategy(params)
+                    wf = adapter.map_parameters(params, sections[0], None)
+                    results.append(await validate(
+                        session, f"ltx25-facelock-splitgpu-{mode}", wf))
+                except Exception as exc:  # noqa: BLE001
+                    results.append((f"ltx25-facelock-splitgpu-{mode}",
+                                    False, f"{type(exc).__name__}: {exc}"))
+        finally:
+            os.environ.pop("SC_SPLIT_GPUS", None)
 
         # ---- custom workflow import path ------------------------------ #
         from custom_workflows import (convert_ui_to_api, detect_format,

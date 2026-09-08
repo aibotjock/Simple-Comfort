@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import secrets
 import socket
 import sys
@@ -180,10 +181,26 @@ async def api_status():
         await pool.refresh_health()
         workers = pool.status()
         connected = any(w["alive"] for w in workers)
+        # Split-GPU mode: one ComfyUI instance drives every card and each
+        # generation's work units divide across them. Report the device
+        # count the engine actually sees so the header can say so.
+        split_gpus = None
+        if os.environ.get("SC_SPLIT_GPUS", "").lower() \
+                in ("1", "true", "on", "yes"):
+            stats = None
+            for w in pool.workers:
+                if w.alive:
+                    stats = await w.client.system_stats()
+                    if stats:
+                        break
+            split_gpus = {
+                "devices": len((stats or {}).get("devices") or []),
+            }
         return {
             "connected": connected,
             "workers": workers,
             "multi_gpu": pool.is_multi,
+            "split_gpus": split_gpus,
             "ffmpeg": _ffmpeg_ok(),
         }
     except Exception as exc:  # noqa: BLE001

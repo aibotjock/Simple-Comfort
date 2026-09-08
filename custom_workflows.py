@@ -93,6 +93,13 @@ def convert_ui_to_api(ui: Dict[str, Any],
     followed to their origin, and Primitive nodes feed their value directly
     into the inputs they drive. Annotation nodes (Note/MarkdownNote) are
     editor-only and skipped.
+
+    ComfyUI >= 0.34 schema shapes are handled explicitly: ``["COMBO",
+    {"options": ...}]`` string-typed combos consume a widget value like
+    classic list combos, and dotted slot names (``values.a`` autogrow inputs,
+    ``sampling_mode.seed`` dynamic-combo nested inputs) are emitted under
+    their full dotted key — the server resolves those against the dynamic
+    schema via ``get_finalized_class_inputs``.
     """
     links: Dict[int, list] = {}
     for link in ui.get("links") or []:
@@ -198,6 +205,16 @@ def convert_ui_to_api(ui: Dict[str, Any],
                 # set it while its parent input was being consumed. Re-
                 # emitting would consume another widget and overwrite it.
                 return
+            # Expanded (dotted) slots of dynamic inputs — autogrow vars
+            # ("values.a") and dynamic-combo nested inputs
+            # ("sampling_mode.seed") — are keyed by their full dotted name
+            # both in UI slot lists and in the submitted prompt.
+            prefix = iname + "."
+            for dotted in [k for k in connected if k.startswith(prefix)]:
+                inputs[dotted] = connected[dotted]
+            for dotted in [k for k in primitive_values
+                           if k.startswith(prefix)]:
+                inputs[dotted] = primitive_values.pop(dotted)
             if iname in connected:
                 inputs[iname] = connected[iname]
                 return
@@ -222,12 +239,16 @@ def convert_ui_to_api(ui: Dict[str, Any],
                 inputs[iname] = value
                 option = _match_dynamic_option(itype, cfg, value)
                 if option:
-                    for sub_name, sub_spec in ((option.get("inputs") or {})
-                                               .get("required") or {}).items():
-                        emit_input(sub_name, sub_spec)
+                    nested = option.get("inputs") or {}
+                    for section in ("required", "optional"):
+                        for sub_name, sub_spec in \
+                                (nested.get(section) or {}).items():
+                            emit_input(f"{iname}.{sub_name}", sub_spec)
                 return
 
-            is_combo = isinstance(itype, list)
+            # Classic list combos AND the >= 0.34 string-typed "COMBO"
+            # (options in the config dict) both consume one widget value.
+            is_combo = isinstance(itype, list) or itype == "COMBO"
             widget_able = (itype in ("STRING", "INT", "FLOAT", "BOOLEAN")
                            or is_combo)
             if not widget_able or cfg.get("forceInput"):
@@ -237,6 +258,8 @@ def convert_ui_to_api(ui: Dict[str, Any],
                 # Ran out of widget values — fall back to the node's
                 # declared default so the graph stays queueable.
                 value = _spec_default(ispec)
+            if value is None:
+                return  # no value and no default: leave the input unset
             inputs[iname] = value
             has_cag = bool(cfg.get("control_after_generate")
                            or cfg.get("control_before_generate"))

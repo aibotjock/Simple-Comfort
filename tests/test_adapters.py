@@ -4,21 +4,25 @@ Covers, per model adapter (ltx25 / wan22 / framepack):
 
 * ``build_adapters()`` registers exactly the three built-in engines;
 * every workflow template JSON parses and contains the loader / decode /
-  save nodes the engine requires;
+  save nodes the engine requires — editor-format templates (the AAN LTX-2.5
+  pack) are checked as UI graphs against the pinned spec fixture, API-format
+  templates as prompt dicts;
 * building a prompt from a typical ``GenerationParams`` yields an API-format
   dict whose nodes are well-formed (``class_type`` + non-empty ``inputs``)
   and fully substituted (no ``{{PLACEHOLDER}}`` tokens remain anywhere).
 """
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, Iterator, List
 
 import pytest
 
 from adapters import (FramePackAdapter, GenerationParams, LTX25Adapter,
                       Wan22Adapter, build_adapters)
-from adapters.base import ModelAdapter
+from adapters.base import ModelAdapter, WORKFLOW_DIR
 from adapters.framepack import MAX_TOTAL_SECONDS as FRAMEPACK_MAX_SECONDS
+from adapters.ltx25 import PROFILES
 
 # ---------------------------------------------------------------------- #
 # Helpers
@@ -106,24 +110,38 @@ def test_build_adapters_registers_all_three_engines():
 
 
 # ---------------------------------------------------------------------- #
-# LTX 2.5
+# LTX 2.5 (AAN candidate pack — editor-format graphs)
 # ---------------------------------------------------------------------- #
 LTX_REQUIRED = {"UNETLoader", "CLIPLoader", "VAELoader",
                 "TextGenerateLTX2Prompt", "VAEDecodeTiled", "SaveVideo"}
 
-@pytest.mark.parametrize("template", [
-    LTX25Adapter.T2V_TEMPLATE, LTX25Adapter.I2V_TEMPLATE,
-    LTX25Adapter.T2V_TEMPLATE_2STAGE, LTX25Adapter.I2V_TEMPLATE_2STAGE,
-])
-def test_ltx25_templates_parse_with_required_nodes(template):
-    assert_template_nodes(LTX25Adapter(), template, LTX_REQUIRED)
+def ui_node_types(workflow: Dict[str, Any]) -> set:
+    """Executable class types in an editor-format (UI) workflow."""
+    return {n["type"] for n in workflow["nodes"]
+            if n["type"] not in ("Note", "MarkdownNote", "Reroute")}
+
+@pytest.mark.parametrize("template", sorted(PROFILES.values()))
+def test_ltx25_pack_templates_parse_with_required_nodes(template):
+    workflow = LTX25Adapter().load_workflow(template)
+    assert isinstance(workflow.get("nodes"), list) and workflow["nodes"]
+    assert isinstance(workflow.get("links"), list)
+    types = ui_node_types(workflow)
+    missing = LTX_REQUIRED - types
+    assert not missing, f"{template} missing nodes: {sorted(missing)}"
+    # Every executable type must resolve against the pinned spec fixture
+    # (MarkdownNote is editor-only and exempt).
+    fixture = json.loads((WORKFLOW_DIR / "aan_ltx25" /
+                          "pack_object_info.json").read_text())
+    unknown = types - set(fixture)
+    assert not unknown, f"{template} types missing from fixture: {sorted(unknown)}"
 
 
 def test_ltx25_prompt_substitutes_all_sections():
     adapter = LTX25Adapter()
     sections = list(build_all_sections(adapter, typical_params()))
-    # 30s target / 6s sections = 5 chained sections, 8k+1 frames each.
-    assert len(sections) == 5
+    # 30s target on the facelock backend = 3 chained ~10s sections
+    # (8k+1 frames each) — longer shots, fewer chain seams.
+    assert len(sections) == 3
     for section, workflow in sections:
         assert section.frames % 8 == 1
         assert_prompt_wellformed(workflow)
@@ -228,7 +246,7 @@ def test_framepack_requires_reference_image():
 # ---------------------------------------------------------------------- #
 def test_ltx25_default_30s_sections_unchanged():
     sections = LTX25Adapter().get_section_strategy(typical_params())
-    assert len(sections) == 5
+    assert len(sections) == 3
     total = sum(s.approx_seconds for s in sections)
     assert 29.5 <= total <= 30.5
 
@@ -236,7 +254,7 @@ def test_ltx25_default_30s_sections_unchanged():
 def test_ltx25_20s_target_distributes_exactly():
     sections = LTX25Adapter().get_section_strategy(
         typical_params(target_seconds=20))
-    assert len(sections) == 3
+    assert len(sections) == 2
     total = sum(s.approx_seconds for s in sections)
     assert 19.5 <= total <= 20.5, f"20s target produced {total:.2f}s"
     # LTX frame counts must stay 8k+1 friendly per section.
@@ -244,13 +262,38 @@ def test_ltx25_20s_target_distributes_exactly():
 
 
 def test_ltx25_explicit_segment_length_respected():
-    # With an explicit segment length the adapter uses it as-is
-    # (approximate totals are the documented trade-off).
+    # Pack profiles take an explicit segment length as-is (approximate
+    # totals are the documented trade-off).
     sections = LTX25Adapter().get_section_strategy(
-        typical_params(target_seconds=20, segment_length=6.0))
+        typical_params(target_seconds=20, segment_length=6.0,
+                       quality_params={"ltx_profile": "two_stage"}))
     assert len(sections) == 3
     # frames snap to 8k+1 (145 @ 24fps -> 6.04s), not exact 6.0
     assert all(5.9 <= s.approx_seconds <= 6.1 for s in sections)
+
+
+def test_ltx25_facelock_clamps_segment_length_into_window():
+    # The face-lock graph is built for ~10s shots with a 20s ceiling: the
+    # UI's default 5s slider value must not double the chain seams, and a
+    # shorter target must never be stretched.
+    sections = LTX25Adapter().get_section_strategy(
+        typical_params(target_seconds=20, segment_length=5.0))
+    assert len(sections) == 2
+    assert all(9.9 <= s.approx_seconds <= 10.1 for s in sections)
+    # Explicit lengths inside the window pass through...
+    sections = LTX25Adapter().get_section_strategy(
+        typical_params(target_seconds=30, segment_length=15.0))
+    assert len(sections) == 2
+    assert all(14.9 <= s.approx_seconds <= 15.1 for s in sections)
+    # ...above it they are capped...
+    sections = LTX25Adapter().get_section_strategy(
+        typical_params(target_seconds=30, segment_length=25.0))
+    assert all(s.approx_seconds <= 20.1 for s in sections)
+    # ...and a short target is never stretched to the floor.
+    sections = LTX25Adapter().get_section_strategy(
+        typical_params(target_seconds=4, segment_length=5.0))
+    assert len(sections) == 1
+    assert 3.9 <= sections[0].approx_seconds <= 4.1
 
 
 def test_wan22_20s_target_four_exact_sections():
@@ -271,11 +314,20 @@ def test_framepack_20s_target_single_call():
 
 def test_duration_section_memory_bound():
     """Distributed sections never exceed ~1.5x the section-length bound."""
+    # Pack graphs keep the 6s default bound.
     for dur, expect_sections in [(8, 1), (10, 2), (20, 3), (30, 5)]:
+        sections = LTX25Adapter().get_section_strategy(
+            typical_params(target_seconds=dur,
+                           quality_params={"ltx_profile": "two_stage"}))
+        assert len(sections) == expect_sections, (dur, len(sections))
+        assert all(s.approx_seconds <= 6.0 * 1.5 + 0.1 for s in sections)
+    # The face-lock backend (balanced/quality default) bounds at its own
+    # 10s shot length instead.
+    for dur, expect_sections in [(8, 1), (10, 1), (20, 2), (30, 3)]:
         sections = LTX25Adapter().get_section_strategy(
             typical_params(target_seconds=dur))
         assert len(sections) == expect_sections, (dur, len(sections))
-        assert all(s.approx_seconds <= 6.0 * 1.5 + 0.1 for s in sections)
+        assert all(s.approx_seconds <= 10.0 * 1.5 + 0.1 for s in sections)
     # 4s (the API minimum) is a single short section.
     assert len(LTX25Adapter().get_section_strategy(
         typical_params(target_seconds=4))) == 1

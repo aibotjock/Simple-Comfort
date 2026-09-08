@@ -1,0 +1,10 @@
+Build standard applied to this pack:
+- LTX-2.5 only.
+- 20-second target, 24 fps default.
+- One visible creative prompt.
+- Local Prompt Enhance ON by default.
+- Avatar and scene image upload.
+- Optional uploaded master audio conditioning using the official A2V freeze pattern.
+- T2V fallback with LTX-generated audio.
+- No exposed positive/negative prompt pair.
+- Do not call a workflow Golden until it has loaded and rendered successfully on the target machine.

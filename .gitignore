@@ -31,3 +31,12 @@ custom_workflows/*
 
 # ...but keep the bundled example workflow tracked
 !custom_workflows/lightx2v-t2v-4step-nativecomfy.json
+
+# Vendored third-party clones (reference/recon artifacts, not app code)
+ComfyUI-GGUF-Loader/
+VoiceStudio/
+apex-studio/
+webcrawl/
+
+# Orphan npm lockfile (no package.json in this repo)
+package-lock.json

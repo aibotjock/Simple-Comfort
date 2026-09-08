@@ -1,0 +1,162 @@
+{
+  "AAN_LTX25_01_AUDIO_FIRST_ANCHOR.json": {
+    "sha256": "5bd7c187b1f95886a51ccacf2386f89accdbab82c82a715c6c707bedd0f19ee8",
+    "static_validation": "PASS",
+    "runtime_validation": "NOT TESTED \u2014 requires user's local ComfyUI",
+    "default_duration_seconds": 20,
+    "default_fps": 24,
+    "default_working_resolution": [
+      704,
+      384
+    ],
+    "default_use_master_audio": true,
+    "default_use_image_conditioning": true,
+    "default_reference_source": "avatar",
+    "two_stage_latent_refinement": false,
+    "pixel_spatial_stage": false
+  },
+  "AAN_LTX25_02_CHARACTER_LOCK_ANCHOR.json": {
+    "sha256": "e78baa0d1024cca827ff1d66400d7e487696b2c97cf56c7dc5ec30e3abe78ecd",
+    "static_validation": "PASS",
+    "runtime_validation": "NOT TESTED \u2014 requires user's local ComfyUI",
+    "default_duration_seconds": 20,
+    "default_fps": 24,
+    "default_working_resolution": [
+      704,
+      384
+    ],
+    "default_use_master_audio": true,
+    "default_use_image_conditioning": true,
+    "default_reference_source": "avatar",
+    "two_stage_latent_refinement": false,
+    "pixel_spatial_stage": false
+  },
+  "AAN_LTX25_03_STUDIO_ANCHOR.json": {
+    "sha256": "b38885054ca48acb1178a59c1e5d207dcc7e8b2f98ec982f4c0e03b21d3b8eec",
+    "static_validation": "PASS",
+    "runtime_validation": "NOT TESTED \u2014 requires user's local ComfyUI",
+    "default_duration_seconds": 20,
+    "default_fps": 24,
+    "default_working_resolution": [
+      832,
+      480
+    ],
+    "default_use_master_audio": true,
+    "default_use_image_conditioning": true,
+    "default_reference_source": "avatar",
+    "two_stage_latent_refinement": false,
+    "pixel_spatial_stage": false
+  },
+  "AAN_LTX25_04_DYNAMIC_ANCHOR.json": {
+    "sha256": "6f2a161613753d07a76f6e33ff9dd9a7d0f9fa1b402aaddd18c3064a99dd6a92",
+    "static_validation": "PASS",
+    "runtime_validation": "NOT TESTED \u2014 requires user's local ComfyUI",
+    "default_duration_seconds": 20,
+    "default_fps": 24,
+    "default_working_resolution": [
+      704,
+      384
+    ],
+    "default_use_master_audio": true,
+    "default_use_image_conditioning": true,
+    "default_reference_source": "avatar",
+    "two_stage_latent_refinement": false,
+    "pixel_spatial_stage": false
+  },
+  "AAN_LTX25_05_T2V_BROLL.json": {
+    "sha256": "d0c685bb3d9aa279a87b891ca592bd6ebe7ca581bc1a2d9b1c3722b7d51eedf2",
+    "static_validation": "PASS",
+    "runtime_validation": "NOT TESTED \u2014 requires user's local ComfyUI",
+    "default_duration_seconds": 20,
+    "default_fps": 24,
+    "default_working_resolution": [
+      832,
+      480
+    ],
+    "default_use_master_audio": false,
+    "default_use_image_conditioning": false,
+    "default_reference_source": "scene",
+    "two_stage_latent_refinement": false,
+    "pixel_spatial_stage": false
+  },
+  "AAN_LTX25_06_I2V_BROLL.json": {
+    "sha256": "0b2f40ea37860941a539ecb13bd9d25b4115c284bfc491d92d5d8ef02dcdf97f",
+    "static_validation": "PASS",
+    "runtime_validation": "NOT TESTED \u2014 requires user's local ComfyUI",
+    "default_duration_seconds": 20,
+    "default_fps": 24,
+    "default_working_resolution": [
+      832,
+      480
+    ],
+    "default_use_master_audio": false,
+    "default_use_image_conditioning": true,
+    "default_reference_source": "scene",
+    "two_stage_latent_refinement": false,
+    "pixel_spatial_stage": false
+  },
+  "AAN_LTX25_07_AUDIO_TIMED_BROLL.json": {
+    "sha256": "f881d49e15d6d34f503fb69177878f0001ce2fb2fd91f432ce751150a865e12d",
+    "static_validation": "PASS",
+    "runtime_validation": "NOT TESTED \u2014 requires user's local ComfyUI",
+    "default_duration_seconds": 20,
+    "default_fps": 24,
+    "default_working_resolution": [
+      704,
+      384
+    ],
+    "default_use_master_audio": true,
+    "default_use_image_conditioning": false,
+    "default_reference_source": "scene",
+    "two_stage_latent_refinement": false,
+    "pixel_spatial_stage": false
+  },
+  "AAN_LTX25_08_FAST_PREVIEW.json": {
+    "sha256": "a7c9d28bfcca4199aa625d746c66e8108a5cacf7d53c337f8911a3023932148c",
+    "static_validation": "PASS",
+    "runtime_validation": "NOT TESTED \u2014 requires user's local ComfyUI",
+    "default_duration_seconds": 20,
+    "default_fps": 24,
+    "default_working_resolution": [
+      512,
+      288
+    ],
+    "default_use_master_audio": true,
+    "default_use_image_conditioning": true,
+    "default_reference_source": "avatar",
+    "two_stage_latent_refinement": false,
+    "pixel_spatial_stage": false
+  },
+  "AAN_LTX25_09_TWO_STAGE_PRODUCTION.json": {
+    "sha256": "e44d7c2f8fba9ce476a196824bd267a1b330ee47b1a960f79fc9f2cfc50f3936",
+    "static_validation": "PASS",
+    "runtime_validation": "NOT TESTED \u2014 requires user's local ComfyUI",
+    "default_duration_seconds": 20,
+    "default_fps": 24,
+    "default_working_resolution": [
+      704,
+      384
+    ],
+    "default_use_master_audio": true,
+    "default_use_image_conditioning": true,
+    "default_reference_source": "avatar",
+    "two_stage_latent_refinement": true,
+    "pixel_spatial_stage": false
+  },
+  "AAN_LTX25_10_MASTER_PIXEL_SPATIAL.json": {
+    "sha256": "2c9d25f4c1bb105d40a81ac82a11b38a859702cc9a112129117ca5b55c45d7fe",
+    "static_validation": "PASS",
+    "runtime_validation": "NOT TESTED \u2014 requires user's local ComfyUI",
+    "default_duration_seconds": 20,
+    "default_fps": 24,
+    "default_working_resolution": [
+      544,
+      320
+    ],
+    "default_use_master_audio": true,
+    "default_use_image_conditioning": true,
+    "default_reference_source": "avatar",
+    "two_stage_latent_refinement": false,
+    "pixel_spatial_stage": true
+  }
+}

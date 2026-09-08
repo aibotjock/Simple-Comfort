@@ -85,6 +85,9 @@ async def probe_video(video_path: Path) -> Dict:
     except (TypeError, ValueError):
         duration = 0.0
 
+    has_audio = any(s.get("codec_type") == "audio"
+                    for s in data.get("streams", []))
+
     return {
         "duration": duration,
         "fps": round(fps, 3),
@@ -92,6 +95,7 @@ async def probe_video(video_path: Path) -> Dict:
         "height": int(video_stream.get("height", 0)),
         "codec": video_stream.get("codec_name", "unknown"),
         "nb_frames": int(video_stream.get("nb_frames", 0) or 0),
+        "has_audio": has_audio,
     }
 
 
@@ -101,6 +105,9 @@ async def concat_videos(paths: List[Path], output_path: Path,
 
     Uses the ffmpeg concat demuxer. Re-encodes to guarantee a constant frame
     rate (required for downstream lip-sync tooling) and uniform codec.
+    Audio is preserved (re-encoded to AAC) when every section carries an
+    audio stream — LTX-2.5 renders joint audio/video — and dropped
+    otherwise, because the demuxer cannot pair mixed stream layouts.
     """
     paths = [Path(p) for p in paths]
     if not paths:
@@ -116,6 +123,17 @@ async def concat_videos(paths: List[Path], output_path: Path,
         # Fast path: nothing to concatenate.
         shutil.copyfile(paths[0], output_path)
         return output_path
+
+    keep_audio = True
+    for p in paths:
+        try:
+            info = await probe_video(p)
+        except FFmpegError:
+            keep_audio = False
+            break
+        if not info.get("has_audio"):
+            keep_audio = False
+            break
 
     list_file = output_path.parent / f".concat_{output_path.stem}.txt"
     with list_file.open("w", encoding="utf-8") as fh:
@@ -133,7 +151,11 @@ async def concat_videos(paths: List[Path], output_path: Path,
     cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p"]
     if fps:
         cmd += ["-r", str(fps), "-vsync", "cfr"]
-    cmd += ["-an", str(output_path)]
+    if keep_audio:
+        cmd += ["-c:a", "aac", "-b:a", "192k"]
+    else:
+        cmd += ["-an"]
+    cmd += [str(output_path)]
 
     try:
         await _run(cmd)
@@ -142,6 +164,61 @@ async def concat_videos(paths: List[Path], output_path: Path,
 
     if not output_path.exists():
         raise FFmpegError("Concat completed but output file is missing")
+    return output_path
+
+
+async def scale_video(input_path: Path, output_path: Path,
+                      width: int, height: int) -> Path:
+    """Rescale a video to EXACT target dimensions without distortion.
+
+    Model grids snap to their own alignment rules (LTX: multiples of 32,
+    halved for x2-decode profiles), so a requested 720p/1080p render lands
+    within a few percent of the target. This finishes the job: lanczos
+    cover-scale (never below target in either axis) then a centre crop of
+    at most a few percent. Audio is copied through when possible.
+    """
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+    if not input_path.exists():
+        raise FFmpegError(f"Video not found for scaling: {input_path}")
+    if width <= 0 or height <= 0:
+        raise FFmpegError("scale_video requires positive dimensions")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    vf = (f"scale={width}:{height}:force_original_aspect_ratio=increase:"
+          f"flags=lanczos,crop={width}:{height}")
+
+    def cmd(audio: str) -> List[str]:
+        args = [
+            _binary("ffmpeg"), "-y",
+            "-i", str(input_path),
+            "-vf", vf,
+            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        ]
+        if audio == "copy":
+            args += ["-c:a", "copy"]
+        elif audio == "encode":
+            args += ["-c:a", "aac", "-b:a", "192k"]
+        else:
+            args += ["-an"]
+        return args + [str(output_path)]
+
+    try:
+        info = await probe_video(input_path)
+        has_audio = bool(info.get("has_audio"))
+    except FFmpegError:
+        has_audio = False
+
+    if has_audio:
+        try:
+            await _run(cmd("copy"))
+        except FFmpegError:
+            await _run(cmd("encode"))
+    else:
+        await _run(cmd("none"))
+
+    if not output_path.exists():
+        raise FFmpegError("Scaling completed but output file is missing")
     return output_path
 
 
@@ -243,12 +320,25 @@ async def create_thumbnail(video_path: Path, output_path: Path,
     return output_path
 
 
+async def _audio_args(input_path: Path) -> List[str]:
+    """Output audio flags matching the input: AAC re-encode when the source
+    carries audio (LTX-2.5 joint A/V), silence otherwise."""
+    try:
+        info = await probe_video(input_path)
+        if info.get("has_audio"):
+            return ["-c:a", "aac", "-b:a", "192k"]
+    except FFmpegError:
+        pass
+    return ["-an"]
+
+
 async def interpolate_fps(input_path: Path, output_path: Path,
                           target_fps: int) -> Path:
     """Motion-interpolate a video up to ``target_fps`` using minterpolate.
 
     Uses ffmpeg's ``minterpolate`` filter (motion-compensated frame
     interpolation) to synthesise intermediate frames for smoother motion.
+    Audio, when present, is re-encoded and kept in sync.
     """
     input_path = Path(input_path)
     output_path = Path(output_path)
@@ -267,8 +357,7 @@ async def interpolate_fps(input_path: Path, output_path: Path,
         "-i", str(input_path),
         "-vf", vf,
         "-c:v", "libx264", "-pix_fmt", "yuv420p",
-        "-an", str(output_path),
-    ]
+    ] + await _audio_args(input_path) + [str(output_path)]
     await _run(cmd)
     if not output_path.exists():
         raise FFmpegError("Frame interpolation completed but output is missing")
@@ -293,8 +382,7 @@ async def denoise_video(input_path: Path, output_path: Path,
         "-i", str(input_path),
         "-vf", f"hqdn3d={strength}",
         "-c:v", "libx264", "-pix_fmt", "yuv420p",
-        "-an", str(output_path),
-    ]
+    ] + await _audio_args(input_path) + [str(output_path)]
     await _run(cmd)
     if not output_path.exists():
         raise FFmpegError("Denoise completed but output is missing")

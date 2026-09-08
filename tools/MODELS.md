@@ -2,9 +2,9 @@
 
 Human-readable manifest of every model file the generation engines need.
 Kept in sync with `tools/check_models.py`, which derives the same list
-live from `workflows/*.json` loader nodes and `adapters/*.py` — **update
-this file together with the checker** whenever a workflow, adapter or
-source entry changes.
+live from `workflows/**/*.json` loader nodes and `adapters/*.py` —
+**update this file together with the checker** whenever a workflow,
+adapter or source entry changes.
 
 Run the checker (read-only, never downloads, never prompts):
 
@@ -24,8 +24,13 @@ confirmed before downloading — no URL is invented for those.
 
 ## LTX 2.5
 
-Workflows: `ltx25_t2v.json`, `ltx25_t2v_2stage.json`, `ltx25_i2v.json`,
-`ltx25_i2v_2stage.json`
+Workflows: the AAN candidate pack `workflows/aan_ltx25/`
+(`AAN_LTX25_01…10_*.json`, byte-faithful, verified against the pack's
+`SHA256_MANIFEST.json`). Quality presets map to profiles
+(`draft` → 08 FAST_PREVIEW, `balanced`/`quality` → 09 TWO_STAGE); any
+profile is forceable via `quality_params["ltx_profile"]`. The legacy
+hand-built `ltx25_*.json` graphs are archived under
+`gauntlet/legacy/ltx25/` and no longer required.
 
 | File | Directory | Approx size | Source |
 |---|---|---|---|
@@ -34,7 +39,8 @@ Workflows: `ltx25_t2v.json`, `ltx25_t2v_2stage.json`, `ltx25_i2v.json`,
 | gemma4_e2b_it_int8_convrot.safetensors (in-graph prompt enhancer) | text_encoders | 4.8 GiB | Lightricks/LTX-2.5 (verify) |
 | ltx-2.5-video-vae-bf16.safetensors | vae | 1.4 GiB | Lightricks/LTX-2.5 (verify) |
 | ltx-2.5-audio-vae-bf16.safetensors | vae | 348 MiB | Lightricks/LTX-2.5 (verify) |
-| ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors (2-stage workflows only) | latent_upscale_models | 950 MiB | Lightricks/LTX-2.5 (verify) |
+| ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors (two-stage profile only) | latent_upscale_models | 950 MiB | Lightricks/LTX-2.5 (verify) |
+| ltx-2.5-22b-ic-lora-pixel-spatial-upscaler-x2-1.0.safetensors (10 MASTER PIXEL_SPATIAL only — generative enhancement, opt-in) | loras | 312 MiB | Lightricks/LTX-2.5 (verify) |
 
 ## Wan 2.2
 
@@ -70,11 +76,11 @@ loaded by the `LoadFramePackModel` custom node, which reads the
 
 ## Notes
 
-- Total footprint: ~106 GiB across 21 files.
+- Total footprint: ~106 GiB across 22 files.
 - Only workflows whose filename prefix maps to an engine registered in
-  `adapters/__init__.py:build_adapters()` (ltx25 / wan22 / framepack)
-  count as required; any other workflow file in `workflows/` is reported
-  as skipped, never as missing.
+  `adapters/__init__.py:build_adapters()` (aan_ltx25 / ltx25 / wan22 /
+  framepack) count as required; any other workflow file in `workflows/`
+  is reported as skipped, never as missing.
 - Incomplete downloads (`*.part`, `*.incomplete`) never count as present;
   the checker flags them on MISSING rows so an interrupted fetch is
   obvious.

@@ -234,6 +234,12 @@ class GenerationManager:
                         section_files, clip.final_video, fps=params.fps
                     )
 
+                # Land the user's exact requested dimensions (720p/1080p):
+                # model grids snap to their own alignment rules, so the
+                # render lands within a few percent and this lanczos
+                # cover+crop finish closes the gap without distortion.
+                await self._ensure_exact_resolution(job, clip, params)
+
                 # Optional professional post-processing (denoise / interpolation).
                 await self._post_process(job, clip, params)
 
@@ -352,6 +358,41 @@ class GenerationManager:
         section_path.write_bytes(data)
         return section_path
 
+    async def _ensure_exact_resolution(self, job: GenerationJob,
+                                       clip: ClipRecord,
+                                       params: GenerationParams) -> None:
+        """Scale/crop the final video to the requested width/height.
+
+        Only acts when the user picked an explicit resolution; Auto keeps
+        whatever grid the model produced. Failure is logged, not fatal —
+        the video is already rendered.
+        """
+        if not (params.width and params.height):
+            return
+        target_w, target_h = int(params.width), int(params.height)
+        try:
+            info = await ffmpeg_utils.probe_video(clip.final_video)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("resolution finalize: probe failed: %s", exc)
+            return
+        if abs(info["width"] - target_w) <= 1 \
+                and abs(info["height"] - target_h) <= 1:
+            return
+        job.message = (f"Finishing at {target_w}x{target_h}...")
+        await self._publish(job)
+        tmp = clip.root_path / "_rescale.mp4"
+        try:
+            await ffmpeg_utils.scale_video(
+                clip.final_video, tmp, target_w, target_h)
+            tmp.replace(clip.final_video)
+            log.info("Job %s finalized to %dx%d (rendered %dx%d)",
+                     job.job_id, target_w, target_h,
+                     info["width"], info["height"])
+        except Exception as exc:  # noqa: BLE001
+            log.warning("resolution finalize failed for %s: %s",
+                        job.job_id, exc)
+            tmp.unlink(missing_ok=True)
+
     async def _post_process(self, job: GenerationJob, clip: ClipRecord,
                             params: GenerationParams) -> None:
         """Apply optional professional post-processing to the final video.
@@ -431,6 +472,12 @@ class GenerationManager:
 
         width, height = adapter.resolve_resolution(params)
         quality = adapter.resolve_quality(params)
+        # Report the ACTUAL final dimensions (the model's working grid can
+        # differ from both the request and the decoded output — e.g. LTX
+        # two-stage renders half and decodes at 2x, then the exact-resolution
+        # finish lands the request). Metadata must never guess.
+        final_w = probe.get("width") or width
+        final_h = probe.get("height") or height
         metadata = {
             "model": adapter.MODEL_NAME,
             "model_key": adapter.MODEL_KEY,
@@ -439,9 +486,10 @@ class GenerationManager:
             "resolved_prompt": params.resolved_prompt,
             "negative_prompt": params.negative_prompt,
             "seed": params.seed,
-            "resolution": f"{width}x{height}",
-            "width": width,
-            "height": height,
+            "resolution": f"{final_w}x{final_h}",
+            "width": final_w,
+            "height": final_h,
+            "render_resolution": f"{width}x{height}",
             "fps": probe.get("fps") or params.fps,
             "duration": probe.get("duration"),
             "codec": probe.get("codec"),
