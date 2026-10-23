@@ -15,8 +15,8 @@ from custom_workflows import (CustomWorkflowError, CustomWorkflowRegistry,
                               convert_ui_to_api, detect_format,
                               parse_validation_errors)
 
-BAR_WORKFLOW = Path("/data/simple_comfort/gauntlet/bar/"
-                    "lightx2v_t2v_4step_NativeComfy.json")
+BAR_WORKFLOW = (Path(__file__).resolve().parents[1] / "gauntlet" / "bar" /
+                "lightx2v_t2v_4step_NativeComfy.json")
 
 
 # ---------------------------------------------------------------------- #

@@ -1,5 +1,5 @@
-accelerate>=1.6.0
-diffusers>=0.33.1
-transformers>=4.46.2
+accelerate>=1.15.0
+diffusers>=0.38.0
+transformers>=5.10.1
 einops
 safetensors

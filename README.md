@@ -17,8 +17,10 @@ finished clip. No cloud calls, no API keys, no telemetry.
 #                4. open http://localhost:7788
 ```
 
-Requires Python 3.10+, FFmpeg (`ffmpeg` + `ffprobe`) on PATH, and the model
+Requires Python 3.11+, FFmpeg (`ffmpeg` + `ffprobe`) on PATH, and the model
 files listed below. Windows equivalents: `setup.bat`, `launch.bat`.
+The Python minimum allows installation of Pillow 13's image-processing security
+fixes. Recreate an existing Python 3.10 virtual environment before upgrading.
 
 ## Engines
 
