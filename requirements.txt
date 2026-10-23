@@ -1,13 +1,14 @@
 fastapi>=0.111.0
 uvicorn[standard]>=0.29.0
-pydantic>=2.0.0
+pydantic>=2.14.1
 pydantic-settings>=2.0.0
-aiohttp>=3.9.0
+aiohttp>=3.14.5
 aiofiles>=23.0.0
-python-multipart>=0.0.9
-Pillow>=10.0.0
+python-multipart>=0.0.31
+# Pillow 13 security fixes require Python 3.11 or newer.
+Pillow>=13.0.0
 
 # --- Dev / test dependencies (not required at runtime) ------------------- #
 # Test suite in tests/: `./venv/bin/python -m pytest -q` from the repo root.
-pytest>=8.0.0
+pytest>=9.0.3
 httpx>=0.27.0  # fastapi TestClient transport for the in-process API tests
